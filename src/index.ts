@@ -20,6 +20,7 @@ const ALLOWED_ORIGINS = [
   "https://niatawards.in",
   "https://niat-awards.vercel.app",
   "https://niatawards-frontend.vercel.app",
+  "https://niatawards-frontend-lac.vercel.app",
 ];
 
 const extraOrigins = (process.env.CORS_ORIGINS ?? "")
