@@ -30,6 +30,7 @@ const nominationSchema = new Schema(
     support_rating: { type: Number, default: null },
     full_name: { type: String, default: null },
     experience: { type: String, default: null },
+    photo_url: { type: String, default: null },
     status: {
       type: String,
       required: true,

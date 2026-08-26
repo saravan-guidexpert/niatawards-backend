@@ -5,6 +5,29 @@ const router = Router();
 
 const VALID_TYPES = ["student", "teacher"] as const;
 
+const sanitizePhotoUrl = (value: unknown): string | null => {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") {
+    throw new Error("photo_url must be a string");
+  }
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error("photo_url is not a valid URL");
+  }
+  const host = parsed.hostname.toLowerCase();
+  const isCloudinary =
+    parsed.protocol === "https:" &&
+    (host === "res.cloudinary.com" || host.endsWith(".cloudinary.com"));
+  if (!isCloudinary) {
+    throw new Error("photo_url must be a Cloudinary URL");
+  }
+  return trimmed;
+};
+
 router.get("/", async (req: Request, res: Response) => {
   try {
     const statusParam = String(req.query.status ?? "shortlisted,winner");
@@ -35,6 +58,14 @@ router.post("/", async (req: Request, res: Response) => {
       return;
     }
 
+    let photoUrl: string | null = null;
+    try {
+      photoUrl = sanitizePhotoUrl(body.photo_url);
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Invalid photo_url" });
+      return;
+    }
+
     const nomination = await Nomination.create({
       type: body.type,
       student_name: body.student_name ?? null,
@@ -54,6 +85,7 @@ router.post("/", async (req: Request, res: Response) => {
       support_rating: body.support_rating ?? null,
       full_name: body.full_name ?? null,
       experience: body.experience ?? null,
+      photo_url: photoUrl,
       status: "pending",
     });
 
