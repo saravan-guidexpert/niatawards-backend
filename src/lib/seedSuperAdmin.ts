@@ -13,7 +13,10 @@ export const findAdminByUsername = (username: string) =>
   });
 
 export const seedSuperAdmin = async () => {
-  await AdminUser.collection.updateMany({}, { $pull: { permissions: "votes" } });
+  await AdminUser.collection.updateMany(
+    {},
+    { $pull: { permissions: "votes" } } as Record<string, unknown>
+  );
 
   const username = superAdminUsername();
   const password = superAdminPassword();

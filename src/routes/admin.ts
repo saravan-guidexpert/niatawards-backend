@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { adminAuth, requireAnyPermission, requirePermission, requireSuperAdmin } from "../middleware/adminAuth";
 import { Nomination } from "../models/Nomination";
+import { FunnelEvent } from "../models/FunnelEvent";
 import { DESTINATIONS, PLATFORMS, PromoLink, slugifyInfluencer } from "../models/PromoLink";
 import { DigitalCampaignLink } from "../models/DigitalCampaignLink";
 import { AdminUser } from "../models/AdminUser";
@@ -266,6 +267,65 @@ const EDITABLE_FIELDS = [
   "status",
   "experience",
 ] as const;
+
+const istDayRange = (day?: string) => {
+  const key = String(day ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return null;
+  const start = new Date(`${key}T00:00:00+05:30`);
+  const end = new Date(`${key}T24:00:00+05:30`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  return { created_at: { $gte: start, $lt: end } };
+};
+
+router.get(
+  "/funnel",
+  requireAnyPermission("nominations", "campaigns", "digital"),
+  async (req: Request, res: Response) => {
+    try {
+      const dateFilter = istDayRange(String(req.query.date ?? ""));
+      const createdAt = dateFilter ? { created_at: dateFilter.created_at } : {};
+
+      const [otpRequested, otpVerified, step1, nominations] = await Promise.all([
+        FunnelEvent.distinct("phone", { stage: "otp_requested", ...createdAt }),
+        FunnelEvent.distinct("phone", { stage: "otp_verified", ...createdAt }),
+        FunnelEvent.distinct("phone", { stage: "form_step1", ...createdAt }),
+        Nomination.find(createdAt, { photo_url: 1, status: 1, type: 1 }).lean(),
+      ]);
+
+      const submitted = nominations.length;
+      const withPhoto = nominations.filter((n) => Boolean(n.photo_url)).length;
+      const pending = nominations.filter((n) => n.status === "pending").length;
+      const shortlistedOnly = nominations.filter((n) => n.status === "shortlisted").length;
+      const winners = nominations.filter((n) => n.status === "winner").length;
+      const rejected = nominations.filter((n) => n.status === "rejected").length;
+      const shortlisted = shortlistedOnly + winners;
+      const students = nominations.filter((n) => n.type === "student").length;
+      const teachers = nominations.filter((n) => n.type === "teacher").length;
+
+      const historical = Math.max(0, submitted - step1.length);
+      const raw = [
+        { id: "otp_requested", label: "OTP requested", hint: "Entered name and phone", count: otpRequested.length + historical },
+        { id: "otp_verified", label: "OTP verified", hint: "Verified and continued", count: otpVerified.length + historical },
+        { id: "form_step1", label: "Details filled", hint: "Completed form step 1", count: step1.length + historical },
+        { id: "submitted", label: "Nominations submitted", hint: "Completed form step 2", count: submitted },
+        { id: "shortlisted", label: "Shortlisted", hint: "Moved to next round", count: shortlisted },
+        { id: "winners", label: "Winners", hint: "Marked as winner", count: winners },
+      ];
+
+      for (let i = raw.length - 2; i >= 0; i -= 1) {
+        raw[i].count = Math.max(raw[i].count, raw[i + 1].count);
+      }
+
+      res.json({
+        stages: raw,
+        extras: { withPhoto, pending, rejected, students, teachers, submitted },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load funnel";
+      res.status(500).json({ error: message });
+    }
+  }
+);
 
 router.get(
   "/nominations",

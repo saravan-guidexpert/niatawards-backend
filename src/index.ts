@@ -12,6 +12,7 @@ import voteRoutes from "./routes/votes";
 import adminRoutes from "./routes/admin";
 import uploadRoutes from "./routes/uploads";
 import utmRoutes from "./routes/utm";
+import funnelRoutes from "./routes/funnel";
 import { seedSuperAdmin } from "./lib/seedSuperAdmin";
 
 const PORT = Number(process.env.PORT) || 5000;
@@ -65,6 +66,7 @@ app.use("/api/votes", voteRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use("/api/utm", utmRoutes);
+app.use("/api/funnel", funnelRoutes);
 
 const start = async () => {
   await connectDB();
