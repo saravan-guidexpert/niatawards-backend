@@ -14,6 +14,7 @@ import uploadRoutes from "./routes/uploads";
 import utmRoutes from "./routes/utm";
 import funnelRoutes from "./routes/funnel";
 import { seedSuperAdmin } from "./lib/seedSuperAdmin";
+import { Nomination } from "./models/Nomination";
 
 const PORT = Number(process.env.PORT) || 5000;
 
@@ -48,6 +49,7 @@ const isAllowedOrigin = (origin?: string) => {
 };
 
 const app = express();
+app.set("trust proxy", 1);
 
 app.use(
   cors({
@@ -70,6 +72,15 @@ app.use("/api/funnel", funnelRoutes);
 
 const start = async () => {
   await connectDB();
+  try {
+    const indexes = await Nomination.collection.indexes();
+    const tokenIndex = indexes.find((idx) => idx.name === "draft_token_1");
+    if (tokenIndex?.unique) {
+      await Nomination.collection.dropIndex("draft_token_1");
+    }
+  } catch {
+    // index may not exist yet
+  }
   await seedSuperAdmin();
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

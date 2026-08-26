@@ -289,7 +289,10 @@ router.get(
         FunnelEvent.distinct("phone", { stage: "otp_requested", ...createdAt }),
         FunnelEvent.distinct("phone", { stage: "otp_verified", ...createdAt }),
         FunnelEvent.distinct("phone", { stage: "form_step1", ...createdAt }),
-        Nomination.find(createdAt, { photo_url: 1, status: 1, type: 1 }).lean(),
+        Nomination.find(
+          { ...createdAt, status: { $ne: "draft" } },
+          { photo_url: 1, status: 1, type: 1 }
+        ).lean(),
       ]);
 
       const submitted = nominations.length;
@@ -332,7 +335,7 @@ router.get(
   requireAnyPermission("nominations", "campaigns", "digital"),
   async (_req: Request, res: Response) => {
   try {
-    const nominations = await Nomination.find().sort({ created_at: -1 });
+    const nominations = await Nomination.find({ status: { $ne: "draft" } }).sort({ created_at: -1 });
     res.json(nominations.map((n) => n.toJSON()));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load nominations";

@@ -1,10 +1,21 @@
 import { Schema, model } from "mongoose";
 import { randomUUID } from "crypto";
 
+export const NOMINATION_FORM_STEPS = [
+  "identity",
+  "otp_sent",
+  "otp_verified",
+  "details",
+  "submitted",
+] as const;
+
+export type NominationFormStep = (typeof NOMINATION_FORM_STEPS)[number];
+
 const jsonTransform = (_doc: unknown, ret: Record<string, unknown>) => {
   ret.id = ret._id;
   delete ret._id;
   delete ret.__v;
+  delete ret.draft_token;
   return ret;
 };
 
@@ -24,6 +35,7 @@ const nominationSchema = new Schema(
     subject: { type: String, default: null },
     impact_story: { type: String, default: null },
     board: { type: String, default: null },
+    teacher_social: { type: String, default: null },
     care_rating: { type: Number, default: null },
     clarity_rating: { type: Number, default: null },
     motivation_rating: { type: Number, default: null },
@@ -36,10 +48,19 @@ const nominationSchema = new Schema(
     utm_campaign: { type: String, default: null },
     utm_term: { type: String, default: null },
     utm_content: { type: String, default: null },
+    nominator_name: { type: String, default: null },
+    nominator_phone: { type: String, default: null },
+    phone_verified: { type: Boolean, default: false },
+    form_step: {
+      type: String,
+      enum: NOMINATION_FORM_STEPS,
+      default: "identity",
+    },
+    draft_token: { type: String, default: null },
     status: {
       type: String,
       required: true,
-      enum: ["pending", "shortlisted", "winner", "rejected"],
+      enum: ["draft", "pending", "shortlisted", "winner", "rejected"],
       default: "pending",
     },
   },
@@ -51,5 +72,7 @@ const nominationSchema = new Schema(
 
 nominationSchema.index({ status: 1 });
 nominationSchema.index({ award_category: 1 });
+nominationSchema.index({ nominator_phone: 1, type: 1, status: 1 });
+nominationSchema.index({ draft_token: 1 }, { sparse: true });
 
 export const Nomination = model("Nomination", nominationSchema);
