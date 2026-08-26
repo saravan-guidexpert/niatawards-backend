@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { adminAuth } from "../middleware/adminAuth";
 import { Nomination } from "../models/Nomination";
 import { Vote } from "../models/Vote";
+import { DESTINATIONS, PLATFORMS, PromoLink, slugifyInfluencer } from "../models/PromoLink";
 
 const router = Router();
 router.use(adminAuth);
@@ -72,6 +73,79 @@ router.patch("/nominations/:id", async (req: Request, res: Response) => {
     res.json(nomination.toJSON());
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to update nomination";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/promo-links", async (_req: Request, res: Response) => {
+  try {
+    const links = await PromoLink.find().sort({ created_at: -1 });
+    res.json(links.map((l) => l.toJSON()));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load promo links";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post("/promo-links", async (req: Request, res: Response) => {
+  try {
+    const body = req.body ?? {};
+    const influencer_name = String(body.influencer_name ?? "").trim();
+    const platform = String(body.platform ?? "").trim().toLowerCase();
+    const campaign = String(body.campaign ?? "").trim();
+    const destination = String(body.destination ?? "").trim();
+
+    if (!influencer_name) {
+      res.status(400).json({ error: "Influencer name is required" });
+      return;
+    }
+    if (!PLATFORMS.includes(platform as (typeof PLATFORMS)[number])) {
+      res.status(400).json({ error: "Invalid platform" });
+      return;
+    }
+    if (!campaign) {
+      res.status(400).json({ error: "Campaign name is required" });
+      return;
+    }
+    if (!DESTINATIONS.includes(destination as (typeof DESTINATIONS)[number])) {
+      res.status(400).json({ error: "Invalid destination" });
+      return;
+    }
+
+    const influencer_slug = slugifyInfluencer(influencer_name);
+    const existing = await PromoLink.findOne({
+      influencer_slug,
+      platform,
+      campaign,
+      destination,
+    });
+    if (existing) {
+      res.json(existing.toJSON());
+      return;
+    }
+
+    try {
+      const link = await PromoLink.create({
+        influencer_name,
+        influencer_slug,
+        platform,
+        campaign,
+        destination,
+      });
+      res.status(201).json(link.toJSON());
+    } catch (err) {
+      const code = err && typeof err === "object" && "code" in err ? (err as { code?: number }).code : undefined;
+      if (code === 11000) {
+        const dup = await PromoLink.findOne({ influencer_slug, platform, campaign, destination });
+        if (dup) {
+          res.json(dup.toJSON());
+          return;
+        }
+      }
+      throw err;
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to create promo link";
     res.status(500).json({ error: message });
   }
 });

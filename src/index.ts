@@ -11,6 +11,7 @@ import nominationRoutes from "./routes/nominations";
 import voteRoutes from "./routes/votes";
 import adminRoutes from "./routes/admin";
 import uploadRoutes from "./routes/uploads";
+import utmRoutes from "./routes/utm";
 
 const PORT = Number(process.env.PORT) || 5000;
 
@@ -62,6 +63,7 @@ app.use("/api/nominations", nominationRoutes);
 app.use("/api/votes", voteRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/uploads", uploadRoutes);
+app.use("/api/utm", utmRoutes);
 
 const start = async () => {
   await connectDB();

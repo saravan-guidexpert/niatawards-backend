@@ -31,6 +31,11 @@ const nominationSchema = new Schema(
     full_name: { type: String, default: null },
     experience: { type: String, default: null },
     photo_url: { type: String, default: null },
+    utm_source: { type: String, default: null },
+    utm_medium: { type: String, default: null },
+    utm_campaign: { type: String, default: null },
+    utm_term: { type: String, default: null },
+    utm_content: { type: String, default: null },
     status: {
       type: String,
       required: true,

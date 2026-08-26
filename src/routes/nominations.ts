@@ -28,6 +28,13 @@ const sanitizePhotoUrl = (value: unknown): string | null => {
   return trimmed;
 };
 
+const sanitizeUtm = (value: unknown): string | null => {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+};
+
 router.get("/", async (req: Request, res: Response) => {
   try {
     const statusParam = String(req.query.status ?? "shortlisted,winner");
@@ -86,6 +93,11 @@ router.post("/", async (req: Request, res: Response) => {
       full_name: body.full_name ?? null,
       experience: body.experience ?? null,
       photo_url: photoUrl,
+      utm_source: sanitizeUtm(body.utm_source),
+      utm_medium: sanitizeUtm(body.utm_medium),
+      utm_campaign: sanitizeUtm(body.utm_campaign),
+      utm_term: sanitizeUtm(body.utm_term),
+      utm_content: sanitizeUtm(body.utm_content),
       status: "pending",
     });
 
