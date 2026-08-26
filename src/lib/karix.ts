@@ -11,11 +11,15 @@ const DEFAULT_OTP_TEXT =
 
 export class KarixError extends Error {
   status: number;
+  // Karix's own Statuscode, surfaced so a gateway rejection can be diagnosed from
+  // the API response without needing access to server logs.
+  gatewayCode?: string;
 
-  constructor(message: string, status = 500) {
+  constructor(message: string, status = 500, gatewayCode?: string) {
     super(message);
     this.name = "KarixError";
     this.status = status;
+    this.gatewayCode = gatewayCode;
   }
 }
 
@@ -47,7 +51,8 @@ export const sendKarixSms = async (phone: string, text: string) => {
   const key = process.env.KARIX_ACCESS_KEY?.trim();
   const sender = process.env.KARIX_SENDER_ID?.trim();
   if (!key || !sender) {
-    throw new KarixError("SMS is not configured", 500);
+    const missing = [!key && "KARIX_ACCESS_KEY", !sender && "KARIX_SENDER_ID"].filter(Boolean);
+    throw new KarixError("SMS is not configured", 500, `missing:${missing.join(",")}`);
   }
 
   const url = (process.env.KARIX_QS_URL?.trim() || DEFAULT_QS_URL).replace(/\/$/, "");
@@ -82,7 +87,8 @@ export const sendKarixSms = async (phone: string, text: string) => {
     console.error("Karix SMS rejected:", raw);
     throw new KarixError(
       /credential/i.test(raw) ? "SMS gateway rejected the request" : "Could not send OTP. Please try again.",
-      /invalid|credential|reject/i.test(raw) ? 400 : 500
+      /invalid|credential|reject/i.test(raw) ? 400 : 500,
+      statusCode || raw.slice(0, 60)
     );
   }
 

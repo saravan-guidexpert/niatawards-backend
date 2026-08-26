@@ -48,7 +48,10 @@ const markDraftVerified = async (phone: string, draftToken: unknown) => {
 
 const sendError = (res: Response, err: unknown, fallback: string) => {
   if (err instanceof KarixError) {
-    res.status(err.status).json({ error: err.message });
+    res.status(err.status).json({
+      error: err.message,
+      ...(err.gatewayCode ? { gateway_code: err.gatewayCode } : {}),
+    });
     return;
   }
   console.error("Error:", err);
