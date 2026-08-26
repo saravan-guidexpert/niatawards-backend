@@ -31,7 +31,7 @@ const sanitizePhotoUrl = (value: unknown): string | null => {
 const sanitizeUtm = (value: unknown): string | null => {
   if (value == null || value === "") return null;
   if (typeof value !== "string") return null;
-  const trimmed = value.trim();
+  const trimmed = value.trim().slice(0, 256);
   return trimmed || null;
 };
 

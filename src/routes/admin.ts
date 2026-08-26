@@ -1,13 +1,256 @@
 import { Router, Request, Response } from "express";
-import { adminAuth } from "../middleware/adminAuth";
+import { adminAuth, requireAnyPermission, requirePermission, requireSuperAdmin } from "../middleware/adminAuth";
 import { Nomination } from "../models/Nomination";
-import { Vote } from "../models/Vote";
 import { DESTINATIONS, PLATFORMS, PromoLink, slugifyInfluencer } from "../models/PromoLink";
+import { DigitalCampaignLink } from "../models/DigitalCampaignLink";
+import { AdminUser } from "../models/AdminUser";
+import {
+  AdminSession,
+  SESSION_TTL_MS,
+  createSessionToken,
+  hashSessionToken,
+} from "../models/AdminSession";
+import { hashPassword, verifyPassword } from "../lib/passwords";
+import { ALL_PANEL_PERMISSIONS, normalizePermissions } from "../lib/permissions";
+import { findAdminByUsername, superAdminPassword, superAdminUsername } from "../lib/seedSuperAdmin";
+import {
+  DIGITAL_STANDARD,
+  buildFinalUtmCampaign,
+  channelToUtmSource,
+  isDigitalChannel,
+  isDigitalCreativeType,
+  isDigitalLandingToken,
+  isDigitalLanguage,
+  isDigitalMedium,
+  isDigitalState,
+  landingTokenToDestination,
+  slugifyDigitalField,
+} from "../lib/digitalCampaign";
 
 const router = Router();
-router.use(adminAuth);
 
 const VALID_STATUSES = ["pending", "shortlisted", "winner", "rejected"];
+const USERNAME_RE = /^[a-zA-Z0-9._-]{3,40}$/;
+
+const normalizeUsername = (value: unknown) => {
+  const username = String(value ?? "").trim();
+  if (!USERNAME_RE.test(username)) return null;
+  return username.toLowerCase();
+};
+
+const publicAdmin = (user: { toJSON: () => Record<string, unknown> }) => user.toJSON();
+
+const issueSession = async (adminUserId: string) => {
+  const token = createSessionToken();
+  await AdminSession.create({
+    admin_user_id: adminUserId,
+    token_hash: hashSessionToken(token),
+    expires_at: new Date(Date.now() + SESSION_TTL_MS),
+  });
+  return token;
+};
+
+router.post("/login", async (req: Request, res: Response) => {
+  try {
+    const username = normalizeUsername(req.body?.username);
+    const password = String(req.body?.password ?? "");
+    if (!username || !password) {
+      res.status(400).json({ error: "Username and password are required" });
+      return;
+    }
+
+    const user = await findAdminByUsername(username);
+    const envUser = superAdminUsername();
+    const envPass = superAdminPassword();
+    const matchesEnv =
+      envUser.length > 0 &&
+      envPass.length > 0 &&
+      username === envUser.toLowerCase() &&
+      password === envPass;
+
+    if (!user || !user.active) {
+      res.status(401).json({ error: "Invalid credentials" });
+      return;
+    }
+
+    const ok = matchesEnv || (await verifyPassword(password, user.password_hash));
+    if (!ok) {
+      res.status(401).json({ error: "Invalid credentials" });
+      return;
+    }
+
+    const token = await issueSession(String(user._id));
+    const json = publicAdmin(user);
+    res.json({
+      token,
+      user: {
+        id: json.id,
+        username: json.username,
+        name: json.name || "",
+        role: json.role,
+        permissions: user.role === "super_admin" ? [...ALL_PANEL_PERMISSIONS] : json.permissions,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to sign in";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.use(adminAuth);
+
+router.get("/me", (req: Request, res: Response) => {
+  res.json({ user: req.admin });
+});
+
+router.post("/logout", async (req: Request, res: Response) => {
+  try {
+    const header = String(req.headers.authorization || "");
+    const bearer = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+    if (bearer) {
+      await AdminSession.deleteOne({ token_hash: hashSessionToken(bearer) });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to sign out";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/users", requireSuperAdmin, async (_req: Request, res: Response) => {
+  try {
+    const users = await AdminUser.find().sort({ created_at: -1 });
+    res.json(users.map((u) => publicAdmin(u)));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load admin users";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post("/users", requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const body = req.body ?? {};
+    const username = normalizeUsername(body.username);
+    const password = String(body.password ?? "");
+    const name = String(body.name ?? "").trim();
+    const permissions = normalizePermissions(body.permissions);
+
+    if (!username) {
+      res.status(400).json({ error: "Username must be 3–40 letters, numbers, dots, hyphens, or underscores" });
+      return;
+    }
+    if (password.length < 8) {
+      res.status(400).json({ error: "Password must be at least 8 characters" });
+      return;
+    }
+    if (permissions.length === 0) {
+      res.status(400).json({ error: "Select at least one admin panel section" });
+      return;
+    }
+
+    const existing = await findAdminByUsername(username);
+    if (existing) {
+      res.status(409).json({ error: "That username is already in use" });
+      return;
+    }
+
+    const user = await AdminUser.create({
+      username,
+      password_hash: await hashPassword(password),
+      name,
+      role: "staff",
+      permissions,
+      active: true,
+    });
+    res.status(201).json(publicAdmin(user));
+  } catch (err) {
+    const code = err && typeof err === "object" && "code" in err ? (err as { code?: number }).code : undefined;
+    if (code === 11000) {
+      res.status(409).json({ error: "That username is already in use" });
+      return;
+    }
+    const message = err instanceof Error ? err.message : "Failed to create admin user";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.patch("/users/:id", requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const user = await AdminUser.findById(req.params.id);
+    if (!user) {
+      res.status(404).json({ error: "Admin user not found" });
+      return;
+    }
+
+    const body = req.body ?? {};
+
+    if (body.name !== undefined) {
+      user.name = String(body.name ?? "").trim();
+    }
+
+    if (body.permissions !== undefined) {
+      if (user.role === "super_admin") {
+        user.permissions = [...ALL_PANEL_PERMISSIONS];
+      } else {
+        const permissions = normalizePermissions(body.permissions);
+        if (permissions.length === 0) {
+          res.status(400).json({ error: "Select at least one admin panel section" });
+          return;
+        }
+        user.permissions = permissions;
+      }
+    }
+
+    if (body.active !== undefined) {
+      const active = Boolean(body.active);
+      if (user.role === "super_admin" && !active) {
+        res.status(400).json({ error: "The super admin account cannot be disabled" });
+        return;
+      }
+      user.active = active;
+      if (!active) {
+        await AdminSession.deleteMany({ admin_user_id: String(user._id) });
+      }
+    }
+
+    if (body.password !== undefined) {
+      const password = String(body.password ?? "");
+      if (password.length < 8) {
+        res.status(400).json({ error: "Password must be at least 8 characters" });
+        return;
+      }
+      user.password_hash = await hashPassword(password);
+      await AdminSession.deleteMany({ admin_user_id: String(user._id) });
+    }
+
+    user.set("updated_at", new Date());
+    await user.save();
+    res.json(publicAdmin(user));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to update admin user";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.delete("/users/:id", requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const user = await AdminUser.findById(req.params.id);
+    if (!user) {
+      res.status(404).json({ error: "Admin user not found" });
+      return;
+    }
+    if (user.role === "super_admin") {
+      res.status(400).json({ error: "The super admin account cannot be deleted" });
+      return;
+    }
+    await AdminSession.deleteMany({ admin_user_id: String(user._id) });
+    await user.deleteOne();
+    res.json({ success: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to delete admin user";
+    res.status(500).json({ error: message });
+  }
+});
 
 const EDITABLE_FIELDS = [
   "teacher_name",
@@ -24,7 +267,10 @@ const EDITABLE_FIELDS = [
   "experience",
 ] as const;
 
-router.get("/nominations", async (_req: Request, res: Response) => {
+router.get(
+  "/nominations",
+  requireAnyPermission("nominations", "campaigns", "digital"),
+  async (_req: Request, res: Response) => {
   try {
     const nominations = await Nomination.find().sort({ created_at: -1 });
     res.json(nominations.map((n) => n.toJSON()));
@@ -34,17 +280,7 @@ router.get("/nominations", async (_req: Request, res: Response) => {
   }
 });
 
-router.get("/votes", async (_req: Request, res: Response) => {
-  try {
-    const votes = await Vote.find().sort({ created_at: -1 });
-    res.json(votes.map((v) => v.toJSON()));
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to load votes";
-    res.status(500).json({ error: message });
-  }
-});
-
-router.patch("/nominations/:id", async (req: Request, res: Response) => {
+router.patch("/nominations/:id", requirePermission("nominations"), async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const body = req.body ?? {};
@@ -77,7 +313,7 @@ router.patch("/nominations/:id", async (req: Request, res: Response) => {
   }
 });
 
-router.get("/promo-links", async (_req: Request, res: Response) => {
+router.get("/promo-links", requirePermission("campaigns"), async (_req: Request, res: Response) => {
   try {
     const links = await PromoLink.find().sort({ created_at: -1 });
     res.json(links.map((l) => l.toJSON()));
@@ -87,7 +323,7 @@ router.get("/promo-links", async (_req: Request, res: Response) => {
   }
 });
 
-router.post("/promo-links", async (req: Request, res: Response) => {
+router.post("/promo-links", requirePermission("campaigns"), async (req: Request, res: Response) => {
   try {
     const body = req.body ?? {};
     const influencer_name = String(body.influencer_name ?? "").trim();
@@ -146,6 +382,118 @@ router.post("/promo-links", async (req: Request, res: Response) => {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to create promo link";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get(
+  "/digital-campaign-links",
+  requirePermission("digital"),
+  async (_req: Request, res: Response) => {
+  try {
+    const links = await DigitalCampaignLink.find().sort({ created_at: -1 });
+    res.json(links.map((l) => l.toJSON()));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load digital campaign links";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post("/digital-campaign-links", requirePermission("digital"), async (req: Request, res: Response) => {
+  try {
+    const body = req.body ?? {};
+    const channel = String(body.channel ?? "").trim();
+    const state = String(body.state ?? "").trim();
+    const language = String(body.language ?? "").trim();
+    const creative_type = String(body.creative_type ?? "").trim();
+    const utm_medium = String(body.utm_medium ?? "").trim().toLowerCase();
+    const audience = slugifyDigitalField(String(body.audience ?? ""));
+    const landing_diff = String(body.landing_diff ?? "").trim();
+    const creative = slugifyDigitalField(String(body.creative ?? ""));
+
+    if (!isDigitalChannel(channel)) {
+      res.status(400).json({ error: "Invalid channel" });
+      return;
+    }
+    if (!isDigitalState(state)) {
+      res.status(400).json({ error: "Invalid state" });
+      return;
+    }
+    if (!isDigitalLanguage(language)) {
+      res.status(400).json({ error: "Invalid language" });
+      return;
+    }
+    if (!isDigitalCreativeType(creative_type)) {
+      res.status(400).json({ error: "Invalid creative type" });
+      return;
+    }
+    if (!isDigitalMedium(utm_medium)) {
+      res.status(400).json({ error: "Invalid utm_medium" });
+      return;
+    }
+    if (!isDigitalLandingToken(landing_diff)) {
+      res.status(400).json({ error: "Invalid landing page" });
+      return;
+    }
+
+    const destination = landingTokenToDestination(landing_diff);
+    const utm_source = channelToUtmSource(channel);
+    const utm_campaign = buildFinalUtmCampaign({
+      channel,
+      state,
+      language,
+      audience,
+      landingDiff: landing_diff,
+      creativeType: creative_type,
+      creative,
+    });
+
+    if (!utm_campaign) {
+      res.status(400).json({ error: "Campaign name is required" });
+      return;
+    }
+
+    const existing = await DigitalCampaignLink.findOne({
+      utm_source,
+      utm_medium,
+      utm_campaign,
+      destination,
+    });
+    if (existing) {
+      res.json(existing.toJSON());
+      return;
+    }
+
+    try {
+      const link = await DigitalCampaignLink.create({
+        standard: DIGITAL_STANDARD,
+        channel,
+        state,
+        language,
+        audience,
+        landing_diff,
+        creative_type,
+        creative,
+        ad_format: "",
+        utm_source,
+        utm_medium,
+        utm_campaign,
+        destination,
+      });
+      res.status(201).json(link.toJSON());
+    } catch (err) {
+      const code = err && typeof err === "object" && "code" in err ? (err as { code?: number }).code : undefined;
+      if (code === 11000) {
+        const dup = await DigitalCampaignLink.findOne({ utm_source, utm_medium, utm_campaign, destination });
+        if (dup) {
+          res.json(dup.toJSON());
+          return;
+        }
+      }
+      throw err;
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to create digital campaign link";
     res.status(500).json({ error: message });
   }
 });

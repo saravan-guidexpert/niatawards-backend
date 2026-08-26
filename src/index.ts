@@ -12,6 +12,7 @@ import voteRoutes from "./routes/votes";
 import adminRoutes from "./routes/admin";
 import uploadRoutes from "./routes/uploads";
 import utmRoutes from "./routes/utm";
+import { seedSuperAdmin } from "./lib/seedSuperAdmin";
 
 const PORT = Number(process.env.PORT) || 5000;
 
@@ -67,6 +68,7 @@ app.use("/api/utm", utmRoutes);
 
 const start = async () => {
   await connectDB();
+  await seedSuperAdmin();
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
