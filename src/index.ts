@@ -15,6 +15,7 @@ import utmRoutes from "./routes/utm";
 import funnelRoutes from "./routes/funnel";
 import { seedSuperAdmin } from "./lib/seedSuperAdmin";
 import { Nomination } from "./models/Nomination";
+import { OtpVerification } from "./models/OtpVerification";
 
 const PORT = Number(process.env.PORT) || 5000;
 
@@ -38,6 +39,13 @@ const isAllowedOrigin = (origin?: string) => {
   if (ALLOWED_ORIGINS.includes(origin) || extraOrigins.includes(origin)) return true;
   try {
     const { hostname, protocol } = new URL(origin);
+    // Vite falls back to 8081, 8082... whenever 8080 is taken, so accept any local port off production.
+    if (
+      process.env.NODE_ENV !== "production" &&
+      (hostname === "localhost" || hostname === "127.0.0.1")
+    ) {
+      return true;
+    }
     if (protocol !== "https:") return false;
     return (
       hostname.endsWith(".vercel.app") &&
@@ -83,6 +91,16 @@ const start = async () => {
     }
   } catch {
     // index may not exist yet
+  }
+  try {
+    await OtpVerification.collection.dropIndex("phone_1");
+  } catch {
+    // legacy Karix OTP unique index may already be gone
+  }
+  try {
+    await OtpVerification.deleteMany({ phoneNumber: { $exists: false } });
+  } catch {
+    // collection may not exist yet
   }
   await seedSuperAdmin();
   app.listen(PORT, () => {

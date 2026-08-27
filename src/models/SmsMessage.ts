@@ -1,9 +1,6 @@
 import { Schema, model } from "mongoose";
 
-// One row per outbound SMS, created when the gateway accepts the request and
-// updated when its delivery report arrives. Karix accepts almost anything —
-// unregistered senders included — so acceptance alone says nothing about
-// delivery, and the DLR is the only place a scrub or failure is visible.
+// One row per outbound OTP SMS, created when MSG91 accepts the request.
 const smsMessageSchema = new Schema({
   request_id: { type: String, index: true },
   phone: { type: String, required: true },

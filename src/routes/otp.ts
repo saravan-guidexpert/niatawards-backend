@@ -1,42 +1,9 @@
 import { Router, Request, Response } from "express";
-import { KarixError, generateAndSendOtp, verifyStoredOtp } from "../lib/karix";
-import { DlrPayload, recordDeliveryReport } from "../lib/dlr";
+import { Msg91Error } from "../lib/msg91";
+import { OtpError, cleanPhone, generateAndSendOtp, isValidOtp, isValidPhone, verifyStoredOtp } from "../lib/otp";
 import { Nomination } from "../models/Nomination";
 
 const router = Router();
-
-const MASTER_PHONE = "9123456789";
-const MASTER_OTP = "000000";
-
-const cleanPhone = (phone: unknown) => String(phone ?? "").replace(/\D/g, "").slice(-10);
-
-// Every send bills the SMS gateway, so throttle per number. In-memory is enough here:
-// the backend is a single instance and a restart resetting the window is harmless.
-const RESEND_INTERVAL_MS = 30_000;
-const MAX_SENDS_PER_DAY = 10;
-const sendLog = new Map<string, { last: number; count: number; day: number }>();
-
-const throttleReason = (phone: string) => {
-  const now = Date.now();
-  const day = Math.floor(now / 86_400_000);
-  const entry = sendLog.get(phone);
-
-  if (!entry || entry.day !== day) {
-    sendLog.set(phone, { last: now, count: 1, day });
-    return null;
-  }
-  if (now - entry.last < RESEND_INTERVAL_MS) {
-    const wait = Math.ceil((RESEND_INTERVAL_MS - (now - entry.last)) / 1000);
-    return `Please wait ${wait}s before requesting another OTP`;
-  }
-  if (entry.count >= MAX_SENDS_PER_DAY) {
-    return "Too many OTP requests today. Please try again tomorrow.";
-  }
-
-  entry.last = now;
-  entry.count += 1;
-  return null;
-};
 
 const markDraftVerified = async (phone: string, draftToken: unknown) => {
   const token = typeof draftToken === "string" ? draftToken.trim() : "";
@@ -48,11 +15,8 @@ const markDraftVerified = async (phone: string, draftToken: unknown) => {
 };
 
 const sendError = (res: Response, err: unknown, fallback: string) => {
-  if (err instanceof KarixError) {
-    res.status(err.status).json({
-      error: err.message,
-      ...(err.gatewayCode ? { gateway_code: err.gatewayCode } : {}),
-    });
+  if (err instanceof OtpError || err instanceof Msg91Error) {
+    res.status(err.status).json({ error: err.message });
     return;
   }
   console.error("Error:", err);
@@ -63,21 +27,13 @@ const sendError = (res: Response, err: unknown, fallback: string) => {
 router.post("/send", async (req: Request, res: Response) => {
   try {
     const cleaned = cleanPhone(req.body?.phone);
-    if (cleaned.length !== 10) {
+    if (!isValidPhone(cleaned)) {
       res.status(400).json({ error: "Enter a valid 10-digit number" });
       return;
     }
 
-    if (cleaned !== MASTER_PHONE) {
-      const blocked = throttleReason(cleaned);
-      if (blocked) {
-        res.status(429).json({ error: blocked });
-        return;
-      }
-      await generateAndSendOtp(cleaned);
-    }
-
-    res.json({ success: true });
+    await generateAndSendOtp(cleaned);
+    res.json({ success: true, message: "OTP sent successfully" });
   } catch (err) {
     sendError(res, err, "Failed to send OTP");
   }
@@ -92,63 +48,36 @@ router.post("/verify", async (req: Request, res: Response) => {
     }
 
     const cleaned = cleanPhone(phone);
-    const isMaster = cleaned === MASTER_PHONE && String(otp) === MASTER_OTP;
+    if (!isValidPhone(cleaned)) {
+      res.status(400).json({ error: "Enter a valid 10-digit number" });
+      return;
+    }
+    if (!isValidOtp(String(otp))) {
+      res.status(400).json({ success: false, error: "Enter a valid 6-digit OTP" });
+      return;
+    }
 
-    if (!isMaster) {
-      try {
-        await verifyStoredOtp(cleaned, String(otp));
-      } catch (err) {
-        if (err instanceof KarixError) {
-          res.status(err.status === 500 ? 500 : 400).json({ success: false, error: err.message });
-          return;
-        }
-        const message = err instanceof Error ? err.message : "Invalid OTP. Please try again.";
-        res.status(400).json({ success: false, error: message });
+    try {
+      await verifyStoredOtp(cleaned, String(otp));
+    } catch (err) {
+      if (err instanceof OtpError) {
+        res.status(err.status === 500 ? 500 : 400).json({ success: false, error: err.message });
         return;
       }
+      const message = err instanceof Error ? err.message : "Invalid OTP. Please try again.";
+      res.status(400).json({ success: false, error: message });
+      return;
     }
 
     await markDraftVerified(cleaned, draft_token);
-    res.json({ success: true });
+    res.json({ success: true, message: "OTP verified", verified: true });
   } catch (err) {
     sendError(res, err, "Failed to verify OTP");
   }
 });
 
-// Karix posts delivery reports here. The method and content type are whatever
-// their platform is configured to send, so accept all of them.
-router.all("/dlr", async (req: Request, res: Response) => {
-  const expected = process.env.KARIX_DLR_TOKEN?.trim();
-  if (expected) {
-    const provided = String(req.query.token ?? req.headers["x-dlr-token"] ?? "");
-    if (provided !== expected) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-  }
-
-  try {
-    const payload: DlrPayload = { ...(req.query as DlrPayload) };
-    delete payload.token;
-
-    const body = req.body;
-    if (typeof body === "string" && body.trim()) {
-      // Some gateways post the report as a raw query string.
-      for (const [key, value] of new URLSearchParams(body)) payload[key] = value;
-    } else if (body && typeof body === "object" && !Array.isArray(body)) {
-      Object.assign(payload, body as DlrPayload);
-    }
-
-    if (!Object.keys(payload).length) {
-      console.warn("Delivery report received with no fields");
-    } else {
-      await recordDeliveryReport(payload);
-    }
-  } catch (err) {
-    console.error("Failed to record delivery report:", err);
-  }
-
-  // Always acknowledge: a non-2xx makes the gateway retry the same report.
+// Leftover gateway delivery reports. Always 200 so a stale callback URL does not retry.
+router.all("/dlr", async (_req: Request, res: Response) => {
   res.status(200).send("OK");
 });
 
