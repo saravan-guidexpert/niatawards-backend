@@ -2,8 +2,10 @@ import { AdminUser } from "../models/AdminUser";
 import { ALL_PANEL_PERMISSIONS } from "./permissions";
 import { hashPassword, verifyPassword } from "./passwords";
 
-export const superAdminUsername = () => (process.env.ADMIN_USERNAME || "NIAT_admin").trim();
-export const superAdminPassword = () => (process.env.ADMIN_PASSWORD || "Niat_teachers_2026").trim();
+// No fallback values: a hardcoded default here would be a published credential,
+// since this repository is public. An unset variable skips seeding instead.
+export const superAdminUsername = () => (process.env.ADMIN_USERNAME || "").trim();
+export const superAdminPassword = () => (process.env.ADMIN_PASSWORD || "").trim();
 
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
