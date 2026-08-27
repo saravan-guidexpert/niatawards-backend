@@ -1,5 +1,6 @@
 import { randomInt, createHmac } from "crypto";
 import { OtpVerification } from "../models/OtpVerification";
+import { SmsMessage } from "../models/SmsMessage";
 
 // The QueryString receiver is the only Karix transport that actually delivers on this
 // account. The JSON receivers (japi and pod3) return status 200 "Request accepted" and
@@ -63,6 +64,9 @@ export const sendKarixSms = async (phone: string, text: string) => {
     dest: toKarixMobile(phone),
     send: sender,
     text,
+    // Karix pushes the delivery report to the callback URL provisioned on the
+    // account. Without this the message status is unobservable.
+    dlr_reg: "1",
   });
 
   // DLT ids are mandatory for Indian traffic; the operator scrubs messages without them.
@@ -93,6 +97,20 @@ export const sendKarixSms = async (phone: string, text: string) => {
   }
 
   console.log(`Karix SMS accepted: request_id=${requestId}`);
+
+  // Recording the send must never block delivery of the OTP itself.
+  try {
+    await SmsMessage.create({
+      request_id: requestId,
+      phone: toKarixMobile(phone).slice(-10),
+      sender,
+      status: "accepted",
+      gateway_status: raw.slice(0, 200),
+    });
+  } catch (err) {
+    console.warn("Could not record SMS send:", err instanceof Error ? err.message : err);
+  }
+
   return { requestId, raw };
 };
 

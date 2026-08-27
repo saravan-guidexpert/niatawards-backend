@@ -4,6 +4,7 @@ import { Nomination } from "../models/Nomination";
 import { FunnelEvent } from "../models/FunnelEvent";
 import { DESTINATIONS, PLATFORMS, PromoLink, slugifyInfluencer } from "../models/PromoLink";
 import { DigitalCampaignLink } from "../models/DigitalCampaignLink";
+import { SmsMessage } from "../models/SmsMessage";
 import { AdminUser } from "../models/AdminUser";
 import {
   AdminSession,
@@ -325,6 +326,41 @@ router.get(
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to load funnel";
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
+router.get(
+  "/sms-logs",
+  requireAnyPermission("nominations", "campaigns", "digital"),
+  async (req: Request, res: Response) => {
+    try {
+      const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+      const messages = await SmsMessage.find().sort({ sent_at: -1 }).limit(limit).lean();
+
+      const summary = { accepted: 0, delivered: 0, failed: 0, unknown: 0 };
+      for (const m of messages) {
+        const key = String(m.status ?? "unknown") as keyof typeof summary;
+        if (key in summary) summary[key] += 1;
+      }
+
+      res.json({
+        summary,
+        messages: messages.map((m) => ({
+          id: String(m._id),
+          request_id: m.request_id ?? null,
+          phone: m.phone,
+          sender: m.sender ?? null,
+          status: m.status,
+          gateway_status: m.gateway_status ?? null,
+          sent_at: m.sent_at,
+          dlr_received_at: m.dlr_received_at ?? null,
+          dlr_payload: m.dlr_payload ?? null,
+        })),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load SMS logs";
       res.status(500).json({ error: message });
     }
   }

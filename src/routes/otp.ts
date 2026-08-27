@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { KarixError, generateAndSendOtp, verifyStoredOtp } from "../lib/karix";
+import { DlrPayload, recordDeliveryReport } from "../lib/dlr";
 import { Nomination } from "../models/Nomination";
 
 const router = Router();
@@ -112,6 +113,43 @@ router.post("/verify", async (req: Request, res: Response) => {
   } catch (err) {
     sendError(res, err, "Failed to verify OTP");
   }
+});
+
+// Karix posts delivery reports here. The method and content type are whatever
+// their platform is configured to send, so accept all of them.
+router.all("/dlr", async (req: Request, res: Response) => {
+  const expected = process.env.KARIX_DLR_TOKEN?.trim();
+  if (expected) {
+    const provided = String(req.query.token ?? req.headers["x-dlr-token"] ?? "");
+    if (provided !== expected) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+  }
+
+  try {
+    const payload: DlrPayload = { ...(req.query as DlrPayload) };
+    delete payload.token;
+
+    const body = req.body;
+    if (typeof body === "string" && body.trim()) {
+      // Some gateways post the report as a raw query string.
+      for (const [key, value] of new URLSearchParams(body)) payload[key] = value;
+    } else if (body && typeof body === "object" && !Array.isArray(body)) {
+      Object.assign(payload, body as DlrPayload);
+    }
+
+    if (!Object.keys(payload).length) {
+      console.warn("Delivery report received with no fields");
+    } else {
+      await recordDeliveryReport(payload);
+    }
+  } catch (err) {
+    console.error("Failed to record delivery report:", err);
+  }
+
+  // Always acknowledge: a non-2xx makes the gateway retry the same report.
+  res.status(200).send("OK");
 });
 
 export default router;

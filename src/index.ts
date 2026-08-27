@@ -61,6 +61,9 @@ app.use(
   })
 );
 app.use(express.json());
+// Delivery reports arrive as form-encoded or plain-text bodies, not JSON.
+app.use(express.urlencoded({ extended: false }));
+app.use(express.text({ type: ["text/plain", "text/*"] }));
 
 app.use("/api/otp", otpRoutes);
 app.use("/api/nominations", nominationRoutes);
