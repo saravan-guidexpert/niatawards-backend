@@ -1,4 +1,4 @@
-export const PANEL_PERMISSIONS = ["nominations", "campaigns", "digital"] as const;
+export const PANEL_PERMISSIONS = ["nominations", "campaigns", "digital", "whatsapp"] as const;
 
 export type PanelPermission = (typeof PANEL_PERMISSIONS)[number];
 export type AdminRole = "super_admin" | "staff";

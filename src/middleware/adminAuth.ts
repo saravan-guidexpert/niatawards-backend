@@ -73,7 +73,7 @@ export const adminAuth = async (req: Request, res: Response, next: NextFunction)
         username: "legacy",
         name: "Legacy Admin",
         role: "super_admin",
-        permissions: ["nominations", "campaigns", "digital"],
+        permissions: ["nominations", "campaigns", "digital", "whatsapp"],
       };
       next();
       return;

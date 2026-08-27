@@ -13,6 +13,9 @@ dist-ssr
 *.local
 .env
 
+# Database exports: contain nominee names and phone numbers
+backups
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -23,3 +26,5 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+.vercel
+.env*

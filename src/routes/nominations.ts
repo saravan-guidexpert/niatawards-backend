@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { Router, Request, Response } from "express";
+import { notifyTeacherOnSubmit } from "../lib/teacherSubmitWhatsApp";
 import { Nomination } from "../models/Nomination";
 
 const router = Router();
@@ -105,7 +106,6 @@ const requireCompleteFields = (draft: InstanceType<typeof Nomination>) => {
     if (!draft.teacher_name?.trim()) throw new Error("Please enter the teacher's name");
     if (cleanPhone(draft.phone).length !== 10) throw new Error("Please enter a valid teacher phone number");
     if (!draft.special_thing?.trim()) throw new Error("Please fill in what's special about this teacher");
-    if (!draft.impact_story?.trim()) throw new Error("Please describe their impact");
     return;
   }
   if (!draft.full_name?.trim()) throw new Error("Please enter your name");
@@ -245,6 +245,29 @@ router.patch("/draft", async (req: Request, res: Response) => {
       return;
     }
 
+    // Switching between student and teacher rewrites the identity fields, since
+    // the same person is the nominee in one case and the nominator in the other.
+    if (typeof body.type === "string" && body.type !== draft.type) {
+      if (!VALID_TYPES.includes(body.type as (typeof VALID_TYPES)[number])) {
+        res.status(400).json({ error: "type must be student or teacher" });
+        return;
+      }
+      const nominatorName = (draft.nominator_name ?? "").trim();
+      draft.type = body.type as (typeof VALID_TYPES)[number];
+      if (draft.type === "teacher") {
+        draft.full_name = nominatorName || draft.full_name;
+        draft.student_name = null;
+        draft.student_class = null;
+        draft.teacher_name = null;
+        draft.phone = cleanPhone(draft.nominator_phone) || draft.phone;
+      } else {
+        draft.student_name = nominatorName || draft.student_name;
+        draft.full_name = null;
+        draft.student_class = null;
+        draft.experience = null;
+      }
+    }
+
     try {
       applyDraftFields(draft, body);
     } catch (err) {
@@ -276,6 +299,7 @@ router.patch("/draft", async (req: Request, res: Response) => {
       await draft.save();
       await Nomination.updateOne({ _id: draft._id }, { $unset: { draft_token: 1 } });
       const submitted = await Nomination.findById(draft._id);
+      await notifyTeacherOnSubmit(submitted ?? draft);
       res.json((submitted ?? draft).toJSON());
       return;
     }
@@ -339,6 +363,7 @@ router.post("/", async (req: Request, res: Response) => {
       phone_verified: true,
     });
 
+    await notifyTeacherOnSubmit(nomination);
     res.status(201).json(nomination.toJSON());
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to submit nomination";

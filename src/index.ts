@@ -13,6 +13,8 @@ import adminRoutes from "./routes/admin";
 import uploadRoutes from "./routes/uploads";
 import utmRoutes from "./routes/utm";
 import funnelRoutes from "./routes/funnel";
+import gupshupWebhookRoutes from "./routes/gupshupWebhook";
+import cronRoutes from "./routes/cron";
 import { seedSuperAdmin } from "./lib/seedSuperAdmin";
 import { Nomination } from "./models/Nomination";
 import { OtpVerification } from "./models/OtpVerification";
@@ -73,6 +75,8 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(express.text({ type: ["text/plain", "text/*"] }));
 
+app.use("/webhook/gupshup", gupshupWebhookRoutes);
+app.use("/api/cron", cronRoutes);
 app.use("/api/otp", otpRoutes);
 app.use("/api/nominations", nominationRoutes);
 app.use("/api/votes", voteRoutes);
