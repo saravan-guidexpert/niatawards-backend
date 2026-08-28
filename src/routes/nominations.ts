@@ -26,6 +26,14 @@ const DRAFT_FIELDS = [
 ] as const;
 
 const cleanPhone = (phone: unknown) => String(phone ?? "").replace(/\D/g, "").slice(-10);
+const TEACHER_PHONE_SAME_AS_STUDENT_MSG = "Please enter your nominating teacher's number";
+
+const assertTeacherPhoneNotNominator = (type: string, teacherPhone: string, nominatorPhone: string) => {
+  if (type !== "student") return;
+  if (teacherPhone.length === 10 && nominatorPhone.length === 10 && teacherPhone === nominatorPhone) {
+    throw new Error(TEACHER_PHONE_SAME_AS_STUDENT_MSG);
+  }
+};
 
 const sanitizePhotoUrl = (value: unknown): string | null => {
   if (value == null || value === "") return null;
@@ -76,7 +84,10 @@ const applyDraftFields = (draft: InstanceType<typeof Nomination>, body: Record<s
     const value = body[field];
     if (field === "phone") {
       const cleaned = cleanPhone(value);
-      if (cleaned.length === 10) draft.phone = cleaned;
+      if (cleaned.length === 10) {
+        assertTeacherPhoneNotNominator(draft.type, cleaned, cleanPhone(draft.nominator_phone));
+        draft.phone = cleaned;
+      }
       continue;
     }
     if (value == null || value === "") {
@@ -103,8 +114,9 @@ const requireCompleteFields = (draft: InstanceType<typeof Nomination>) => {
     if (!draft.student_name?.trim()) throw new Error("Please enter your name");
     if (!draft.student_class?.trim()) throw new Error("Please select your current education");
     if (!draft.school_name?.trim()) throw new Error("Please enter school / college name");
-    if (!draft.teacher_name?.trim()) throw new Error("Please enter the teacher's name");
+    if (!draft.teacher_name?.trim()) throw new Error("Please enter the teacher's full name");
     if (cleanPhone(draft.phone).length !== 10) throw new Error("Please enter a valid teacher phone number");
+    assertTeacherPhoneNotNominator(draft.type, cleanPhone(draft.phone), cleanPhone(draft.nominator_phone));
     if (!draft.special_thing?.trim()) throw new Error("Please fill in what's special about this teacher");
     return;
   }
@@ -324,6 +336,17 @@ router.post("/", async (req: Request, res: Response) => {
       return;
     }
 
+    try {
+      assertTeacherPhoneNotNominator(
+        body.type,
+        cleanPhone(body.phone),
+        cleanPhone(body.nominator_phone)
+      );
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : TEACHER_PHONE_SAME_AS_STUDENT_MSG });
+      return;
+    }
+
     let photoUrl: string | null = null;
     try {
       photoUrl = sanitizePhotoUrl(body.photo_url);
@@ -353,6 +376,7 @@ router.post("/", async (req: Request, res: Response) => {
       full_name: body.full_name ?? null,
       experience: body.experience ?? null,
       photo_url: photoUrl,
+      nominator_phone: cleanPhone(body.nominator_phone) || null,
       utm_source: sanitizeUtm(body.utm_source),
       utm_medium: sanitizeUtm(body.utm_medium),
       utm_campaign: sanitizeUtm(body.utm_campaign),

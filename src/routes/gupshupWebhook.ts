@@ -1,6 +1,12 @@
 import { Router, Request, Response } from "express";
 import { verifyGupshupWebhookRequest } from "../lib/gupshupWebhookAuth";
-import { handleDeliveryEvent, handleInboundMessage, parseWebhookRoot } from "../lib/gupshupWebhook";
+import {
+  handleDeliveryEvent,
+  handleInboundMessage,
+  handleMetaV3Payload,
+  isMetaV3Payload,
+  parseWebhookRoot,
+} from "../lib/gupshupWebhook";
 
 const router = Router();
 
@@ -19,7 +25,9 @@ router.post("/", async (req: Request, res: Response) => {
   const type = String(root.type || "").toLowerCase();
 
   try {
-    if (type === "message") {
+    if (isMetaV3Payload(root)) {
+      await handleMetaV3Payload(root);
+    } else if (type === "message") {
       await handleInboundMessage(root);
     } else if (type === "message-event") {
       await handleDeliveryEvent(root);

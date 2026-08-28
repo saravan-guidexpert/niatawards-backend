@@ -99,10 +99,15 @@ const recordWebhook = async (fields: {
   }
 };
 
-const matchOutboundEvent = async (gsId: string, destination: string) => {
-  if (gsId) {
+const matchOutboundEvent = async (ids: string[], destination: string) => {
+  const unique = [...new Set(ids.map((id) => String(id || "").trim()).filter(Boolean))];
+  if (unique.length) {
     const byId = await WhatsAppMessageEvent.findOne({
-      $or: [{ gupshupMessageId: gsId }, { gupshupInternalMessageId: gsId }, { whatsappWaMessageId: gsId }],
+      $or: unique.flatMap((id) => [
+        { gupshupMessageId: id },
+        { gupshupInternalMessageId: id },
+        { whatsappWaMessageId: id },
+      ]),
     }).sort({ createdAt: -1 });
     if (byId) return byId;
   }
@@ -169,7 +174,7 @@ export const handleDeliveryEvent = async (root: Record<string, unknown>) => {
   if (recorded.duplicate) return { received: true, duplicate: true };
   if (!newStatus) return { received: true, ignored: true };
 
-  const doc = await matchOutboundEvent(gsId, destination);
+  const doc = await matchOutboundEvent([gsId, String(payload.id || "")], destination);
   if (!doc) return { received: true, unmatched: true };
 
   await WhatsAppWebhookEvent.updateOne(
@@ -231,4 +236,74 @@ export const handleDeliveryEvent = async (root: Record<string, unknown>) => {
     await maybeSettleRetryGroup(doc.retryGroupId as Types.ObjectId);
   }
   return { received: true, status: newStatus };
+};
+
+const metaTextFromMessage = (message: Record<string, unknown>) => {
+  const text = asRecord(message.text);
+  const button = asRecord(message.button);
+  const interactive = asRecord(message.interactive);
+  const buttonReply = asRecord(interactive.button_reply);
+  return String(
+    text.body || button.text || button.payload || buttonReply.title || buttonReply.id || message.body || ""
+  ).trim();
+};
+
+export const isMetaV3Payload = (root: Record<string, unknown>) => Array.isArray(root.entry);
+
+export const handleMetaV3Payload = async (root: Record<string, unknown>) => {
+  const entries = Array.isArray(root.entry) ? root.entry : [];
+  for (const entry of entries) {
+    const changes = asRecord(entry).changes;
+    const changeList = Array.isArray(changes) ? changes : [];
+    for (const change of changeList) {
+      const value = asRecord(asRecord(change).value);
+      const messages = Array.isArray(value.messages) ? value.messages : [];
+      for (const raw of messages) {
+        const message = asRecord(raw);
+        const from = toPhone10(String(message.from || ""));
+        const text = metaTextFromMessage(message);
+        const providerId = String(message.id || "").trim();
+        const synthetic: Record<string, unknown> = {
+          type: "message",
+          payload: { id: providerId, source: from, payload: { type: "text", text } },
+        };
+        await handleInboundMessage(synthetic);
+      }
+      const statuses = Array.isArray(value.statuses) ? value.statuses : [];
+      for (const raw of statuses) {
+        const st = asRecord(raw);
+        const ids = [st.gs_id, st.gsId, st.meta_msg_id, st.id].map((v) => String(v || "").trim()).filter(Boolean);
+        const destination = String(st.recipient_id || "");
+        const stage = String(st.status || "").toLowerCase();
+        const errors = Array.isArray(st.errors) ? st.errors : [];
+        const err = asRecord(errors[0]);
+        const errorData = asRecord(err.error_data);
+        const errorCode = String(err.code || "").trim();
+        const errorReason = String(err.message || err.title || errorData.details || "").trim();
+        const synthetic: Record<string, unknown> = {
+          type: "message-event",
+          payload: {
+            type: stage,
+            gsId: ids[0] || "",
+            id: String(st.id || ""),
+            destination,
+            errorCode,
+            reason: errorReason,
+          },
+        };
+        await handleDeliveryEvent(synthetic);
+        if (ids.length > 1) {
+          const doc = await matchOutboundEvent(ids, destination);
+          if (doc) {
+            const extra: Record<string, unknown> = { updatedAt: new Date() };
+            if (ids.find((id) => id.startsWith("wamid.")) && !doc.whatsappWaMessageId) {
+              extra.whatsappWaMessageId = ids.find((id) => id.startsWith("wamid.")) || null;
+            }
+            await WhatsAppMessageEvent.updateOne({ _id: doc._id }, { $set: extra });
+          }
+        }
+      }
+    }
+  }
+  return { received: true };
 };
