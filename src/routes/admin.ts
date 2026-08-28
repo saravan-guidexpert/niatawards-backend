@@ -436,6 +436,20 @@ router.patch("/nominations/:id", requirePermission("nominations"), async (req: R
   }
 });
 
+router.delete("/nominations/:id", requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const nomination = await Nomination.findByIdAndDelete(req.params.id);
+    if (!nomination) {
+      res.status(404).json({ error: "Nomination not found" });
+      return;
+    }
+    res.json({ success: true, id: String(nomination._id) });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to delete nomination";
+    res.status(500).json({ error: message });
+  }
+});
+
 router.get("/promo-links", requirePermission("campaigns"), async (_req: Request, res: Response) => {
   try {
     const links = await PromoLink.find().sort({ created_at: -1 });
