@@ -16,7 +16,8 @@ import { sendWhatsApp } from "../lib/whatsappSend";
 import { IN_FLIGHT_STATUSES, TERMINAL_SUCCESS_STATUSES } from "../lib/whatsappRetryRules";
 import {
   TEACHER_SUBMIT_POSTER_URL,
-  TEACHER_SUBMIT_WHATSAPP_KIND,
+  ensureTeacherSubmitParams,
+  isStudentNominateKind,
 } from "../lib/teacherSubmitWhatsApp";
 
 const router = Router();
@@ -441,9 +442,7 @@ router.post("/actions/test-send", requireSuperAdmin, async (req: Request, res: R
           .filter(Boolean);
     const headerImageUrl =
       String(req.body?.headerImageUrl || "").trim() ||
-      (kind.replace(/[^a-z0-9_]+/gi, "_").toLowerCase() === TEACHER_SUBMIT_WHATSAPP_KIND
-        ? TEACHER_SUBMIT_POSTER_URL
-        : null);
+      (isStudentNominateKind(kind) ? TEACHER_SUBMIT_POSTER_URL : null);
     if (!/^\d{10}$/.test(phone)) {
       res.status(400).json({ error: "A 10-digit phone number is required" });
       return;
@@ -451,7 +450,7 @@ router.post("/actions/test-send", requireSuperAdmin, async (req: Request, res: R
     const result = await sendWhatsApp({
       kind,
       phone,
-      params,
+      params: ensureTeacherSubmitParams(kind, params),
       source: "admin_manual",
       headerImageUrl,
     });
@@ -491,7 +490,10 @@ router.post("/actions/resend", requireSuperAdmin, async (req: Request, res: Resp
     const result = await sendWhatsApp({
       kind: event.messageKind,
       phone: event.phone,
-      params: Array.isArray(event.params) ? event.params : [],
+      params: ensureTeacherSubmitParams(
+        String(event.messageKind),
+        Array.isArray(event.params) ? event.params.map((p) => String(p ?? "")) : []
+      ),
       source: "admin_manual",
       attemptNumber: nextAttempt,
       retryGroupId: event.retryGroupId,

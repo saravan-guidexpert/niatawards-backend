@@ -2,6 +2,7 @@ import { Types } from "mongoose";
 import { WhatsAppMessageEvent } from "../models/WhatsAppMessageEvent";
 import { WhatsAppRetryGroup } from "../models/WhatsAppRetryGroup";
 import { maybeSettleRetryGroup, sendWhatsApp } from "./whatsappSend";
+import { ensureTeacherSubmitParams } from "./teacherSubmitWhatsApp";
 import {
   MAX_AUTO_ATTEMPTS,
   RETRY_EXCLUSION_REASON,
@@ -127,7 +128,10 @@ const promoteGroup = async (group: GroupLean, now: Date) => {
     const result = await sendWhatsApp({
       kind: row.messageKind,
       phone: row.phone,
-      params: Array.isArray(row.params) ? row.params : [],
+      params: ensureTeacherSubmitParams(
+        String(row.messageKind),
+        Array.isArray(row.params) ? row.params.map((p) => String(p ?? "")) : []
+      ),
       source: "retry_cron",
       attemptNumber: nextAttempt,
       retryGroupId: group._id,

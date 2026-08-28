@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { Router, Request, Response } from "express";
-import { notifyTeacherOnSubmit } from "../lib/teacherSubmitWhatsApp";
+import { notifyStudentOnNominate } from "../lib/teacherSubmitWhatsApp";
 import { Nomination } from "../models/Nomination";
 
 const router = Router();
@@ -311,7 +311,7 @@ router.patch("/draft", async (req: Request, res: Response) => {
       await draft.save();
       await Nomination.updateOne({ _id: draft._id }, { $unset: { draft_token: 1 } });
       const submitted = await Nomination.findById(draft._id);
-      await notifyTeacherOnSubmit(submitted ?? draft);
+      await notifyStudentOnNominate(submitted ?? draft);
       res.json((submitted ?? draft).toJSON());
       return;
     }
@@ -387,7 +387,7 @@ router.post("/", async (req: Request, res: Response) => {
       phone_verified: true,
     });
 
-    await notifyTeacherOnSubmit(nomination);
+    await notifyStudentOnNominate(nomination);
     res.status(201).json(nomination.toJSON());
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to submit nomination";

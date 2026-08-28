@@ -1,48 +1,138 @@
+import { WhatsAppMessageEvent } from "../models/WhatsAppMessageEvent";
 import { maskPhone, toPhone10 } from "./gupshup";
-import { sendWhatsApp } from "./whatsappSend";
+import { sendWhatsApp, type SendWhatsAppResult } from "./whatsappSend";
 
+/** New sends use this kind. The Gupshup template id still lives in GUPSHUP_TEMPLATE_TEACHER_SUBMIT. */
+export const STUDENT_NOMINATE_WHATSAPP_KIND = "student_nominate";
+/** Legacy kind from when this template was wired to teacher self-nomination. */
 export const TEACHER_SUBMIT_WHATSAPP_KIND = "teacher_submit";
 
 export const TEACHER_SUBMIT_POSTER_URL =
   "https://res.cloudinary.com/dfqdb1xws/image/upload/v1787836370/WhatsApp_Image_2026-08-27_at_5.35.22_PM_1_venn7v.jpg";
 
-type TeacherSubmitNomination = {
+export const TEACHER_SUBMIT_REFERRAL_URL =
+  "https://www.niatawards.in/?utm_source=whatsapp&utm_medium=referral_link&utm_campaign=guru_ratna_2026&utm_content=Referral+link";
+
+const normalizeKind = (kind: string) =>
+  String(kind || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_|_$/g, "");
+
+export const isStudentNominateKind = (kind: string) => {
+  const normalized = normalizeKind(kind);
+  return normalized === STUDENT_NOMINATE_WHATSAPP_KIND || normalized === TEACHER_SUBMIT_WHATSAPP_KIND;
+};
+
+/** {{1}} student name, {{2}} share/referral link. */
+export const studentNominateTemplateParams = (name: string) => {
+  const display = String(name || "").trim() || "Student";
+  return [display, TEACHER_SUBMIT_REFERRAL_URL];
+};
+
+export const teacherSubmitTemplateParams = studentNominateTemplateParams;
+
+export const ensureTeacherSubmitParams = (kind: string, params: string[] = []) => {
+  if (!isStudentNominateKind(kind)) return params;
+  return studentNominateTemplateParams(params[0] || "Student");
+};
+
+type StudentNominateNomination = {
   type?: string | null;
   phone?: string | null;
-  full_name?: string | null;
+  nominator_phone?: string | null;
+  student_name?: string | null;
   nominator_name?: string | null;
-  teacher_name?: string | null;
 };
 
-const teacherDisplayName = (nomination: TeacherSubmitNomination) => {
-  const name = String(
-    nomination.full_name || nomination.nominator_name || nomination.teacher_name || ""
-  ).trim();
-  return name || "Teacher";
+const studentDisplayName = (nomination: StudentNominateNomination) => {
+  const name = String(nomination.student_name || nomination.nominator_name || "").trim();
+  return name || "Student";
 };
 
-/** Sends the teacher-submit template. Failures are logged; they never throw. */
-export const notifyTeacherOnSubmit = async (nomination: TeacherSubmitNomination | null | undefined) => {
-  if (!nomination || nomination.type !== "teacher") return;
-  const phone = toPhone10(nomination.phone || "");
+const studentPhone = (nomination: StudentNominateNomination) =>
+  toPhone10(nomination.nominator_phone || "");
+
+const shouldImmediateRetry = (result: SendWhatsAppResult) => {
+  if (result.success || result.duplicate) return false;
+  const error = String(result.error || "");
+  if (error === "Recipient opted out (STOP)" || error === "Invalid phone") return false;
+  return Boolean(result.retryGroupId);
+};
+
+export type TeacherWhatsAppStatus = {
+  status: string;
+  attemptNumber: number;
+  error: string | null;
+};
+
+/** Latest student-nominate attempt per 10-digit phone, for the admin nominations list. */
+export const latestTeacherSubmitStatusByPhones = async (phones: string[]) => {
+  const unique = [...new Set(phones.map((p) => toPhone10(p)).filter((p) => /^\d{10}$/.test(p)))];
+  const out = new Map<string, TeacherWhatsAppStatus>();
+  if (!unique.length) return out;
+
+  const rows = await WhatsAppMessageEvent.find({
+    messageKind: { $in: [STUDENT_NOMINATE_WHATSAPP_KIND, TEACHER_SUBMIT_WHATSAPP_KIND] },
+    phone: { $in: unique },
+  })
+    .select({ phone: 1, status: 1, attemptNumber: 1, errorMessage: 1, createdAt: 1 })
+    .sort({ createdAt: -1, attemptNumber: -1 })
+    .lean();
+
+  for (const row of rows) {
+    const phone = String(row.phone || "");
+    if (!phone || out.has(phone)) continue;
+    out.set(phone, {
+      status: String(row.status || "queued"),
+      attemptNumber: Number(row.attemptNumber || 1),
+      error: row.errorMessage ? String(row.errorMessage) : null,
+    });
+  }
+  return out;
+};
+
+/** Sends the student-nominate template immediately. On failure, retries once. Never throws. */
+export const notifyStudentOnNominate = async (nomination: StudentNominateNomination | null | undefined) => {
+  if (!nomination || nomination.type !== "student") return;
+  const phone = studentPhone(nomination);
   if (!/^\d{10}$/.test(phone)) return;
 
-  const name = teacherDisplayName(nomination);
+  const name = studentDisplayName(nomination);
+  const payload = {
+    kind: STUDENT_NOMINATE_WHATSAPP_KIND,
+    phone,
+    params: studentNominateTemplateParams(name),
+    source: "api" as const,
+    headerImageUrl: TEACHER_SUBMIT_POSTER_URL,
+  };
+
   try {
-    const result = await sendWhatsApp({
-      kind: TEACHER_SUBMIT_WHATSAPP_KIND,
-      phone,
-      params: [name],
-      source: "api",
-      headerImageUrl: TEACHER_SUBMIT_POSTER_URL,
-    });
-    if (!result.success) {
-      console.error("[WhatsApp] teacher_submit failed", maskPhone(phone), result.error);
+    const first = await sendWhatsApp({ ...payload, attemptNumber: 1 });
+    if (first.success) {
+      console.log("[WhatsApp] student_nominate submitted", maskPhone(phone), first.eventId);
       return;
     }
-    console.log("[WhatsApp] teacher_submit submitted", maskPhone(phone), result.eventId);
+    console.error("[WhatsApp] student_nominate failed", maskPhone(phone), first.error);
+
+    if (!shouldImmediateRetry(first)) return;
+
+    const second = await sendWhatsApp({
+      ...payload,
+      attemptNumber: 2,
+      retryGroupId: first.retryGroupId,
+      parentMessageEventId: first.eventId,
+    });
+    if (second.success) {
+      console.log("[WhatsApp] student_nominate retry submitted", maskPhone(phone), second.eventId);
+      return;
+    }
+    console.error("[WhatsApp] student_nominate retry failed", maskPhone(phone), second.error);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[WhatsApp] teacher_submit exception", maskPhone(phone), message);
+    console.error("[WhatsApp] student_nominate exception", maskPhone(phone), message);
   }
 };
+
+export const notifyTeacherOnSubmit = notifyStudentOnNominate;

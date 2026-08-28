@@ -1,6 +1,8 @@
 import { Router, Request, Response } from "express";
 import { adminAuth, requireAnyPermission, requirePermission, requireSuperAdmin } from "../middleware/adminAuth";
 import { Nomination } from "../models/Nomination";
+import { latestTeacherSubmitStatusByPhones } from "../lib/teacherSubmitWhatsApp";
+import { toPhone10 } from "../lib/gupshup";
 import { FunnelEvent } from "../models/FunnelEvent";
 import { DESTINATIONS, PLATFORMS, PromoLink, slugifyInfluencer } from "../models/PromoLink";
 import { DigitalCampaignLink } from "../models/DigitalCampaignLink";
@@ -376,7 +378,25 @@ router.get(
   try {
     // Drafts included so the panel shows leads that stopped part-way through the form.
     const nominations = await Nomination.find().sort({ created_at: -1 });
-    res.json(nominations.map((n) => n.toJSON()));
+    const jsons = nominations.map((n) => n.toJSON() as Record<string, unknown>);
+    const studentPhones = jsons
+      .filter((n) => n.type === "student" && n.status !== "draft")
+      .map((n) => String(n.nominator_phone || ""));
+    const waByPhone = await latestTeacherSubmitStatusByPhones(studentPhones);
+    res.json(
+      jsons.map((n) => {
+        if (n.type !== "student" || n.status === "draft") {
+          return { ...n, whatsapp_status: null, whatsapp_attempt: null, whatsapp_error: null };
+        }
+        const wa = waByPhone.get(toPhone10(String(n.nominator_phone || "")));
+        return {
+          ...n,
+          whatsapp_status: wa?.status || "not_sent",
+          whatsapp_attempt: wa?.attemptNumber || null,
+          whatsapp_error: wa?.error || null,
+        };
+      })
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load nominations";
     res.status(500).json({ error: message });

@@ -37,7 +37,16 @@ export const templateEnvKeyForKind = (kind: string) => `GUPSHUP_TEMPLATE_${kindS
 export const templateIdForKind = (kind: string) => {
   const key = templateEnvKeyForKind(kind);
   const value = process.env[key]?.trim();
-  return value || null;
+  if (value) return value;
+  const slug = kindSlug(kind);
+  if (slug === "STUDENT_NOMINATE" || slug === "TEACHER_SUBMIT") {
+    return (
+      process.env.GUPSHUP_TEMPLATE_STUDENT_NOMINATE?.trim() ||
+      process.env.GUPSHUP_TEMPLATE_TEACHER_SUBMIT?.trim() ||
+      null
+    );
+  }
+  return null;
 };
 
 export const listedConfiguredTemplateEnvKeys = () =>
@@ -53,6 +62,7 @@ export const WHATSAPP_ENV_HINT_KEYS = [
   "GUPSHUP_WEBHOOK_SECRET",
   "GUPSHUP_WEBHOOK_AUTH_REQUIRED",
   "GUPSHUP_TEMPLATE_TEACHER_SUBMIT",
+  "GUPSHUP_TEMPLATE_STUDENT_NOMINATE",
 ] as const;
 
 export const listedWhatsAppEnvHints = () => {
