@@ -7,10 +7,18 @@ const router = Router();
 
 const markDraftVerified = async (phone: string, draftToken: unknown) => {
   const token = typeof draftToken === "string" ? draftToken.trim() : "";
-  if (!token) return;
+  const update = { phone_verified: true, form_step: "otp_verified" as const };
+  if (token) {
+    const byToken = await Nomination.findOneAndUpdate(
+      { draft_token: token, status: "draft" },
+      update
+    );
+    if (byToken) return;
+  }
   await Nomination.findOneAndUpdate(
-    { draft_token: token, nominator_phone: phone, status: "draft" },
-    { phone_verified: true, form_step: "otp_verified" }
+    { nominator_phone: phone, status: "draft" },
+    update,
+    { sort: { created_at: -1 } }
   );
 };
 
