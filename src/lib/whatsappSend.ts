@@ -80,6 +80,15 @@ export const scheduleRetryPromotion = async (
     },
     { $set: { nextPromotionDueAt: due, updatedAt: new Date() } }
   );
+  try {
+    const { promoteRetryGroupNow } = await import("./whatsappRetryOrchestrator");
+    await promoteRetryGroupNow(retryGroupId);
+  } catch (err) {
+    console.error(
+      "[WhatsApp] immediate retry failed",
+      err instanceof Error ? err.message : err
+    );
+  }
 };
 
 export const maybeSettleRetryGroup = async (retryGroupId: Types.ObjectId) => {
@@ -143,9 +152,11 @@ const applyClassification = async (
     ...extra,
   };
   await WhatsAppMessageEvent.updateOne({ _id: eventId }, { $set: set });
-  if (classification.retryable) {
-    const event = await WhatsAppMessageEvent.findById(eventId).lean();
-    await scheduleRetryPromotion(retryGroupId, Number(event?.attemptNumber || 1));
+  const event = await WhatsAppMessageEvent.findById(eventId).lean();
+  const attemptNumber = Number(event?.attemptNumber || 1);
+  const optedOut = classification.metaNote === "opted_out";
+  if (!optedOut && attemptNumber < MAX_AUTO_ATTEMPTS) {
+    await scheduleRetryPromotion(retryGroupId, attemptNumber);
   } else {
     await maybeSettleRetryGroup(retryGroupId);
   }

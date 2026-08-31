@@ -5,6 +5,7 @@ import { WhatsAppWebhookEvent } from "../models/WhatsAppWebhookEvent";
 import { toPhone10 } from "./gupshup";
 import {
   classifyCampaignFailure,
+  MAX_AUTO_ATTEMPTS,
   RETRY_EXCLUSION_REASON,
 } from "./whatsappRetryRules";
 import { maybeSettleRetryGroup, scheduleRetryPromotion } from "./whatsappSend";
@@ -223,9 +224,14 @@ export const handleDeliveryEvent = async (root: Record<string, unknown>) => {
       set.retryExclusionMeta = { note: classification.metaNote };
     }
     await WhatsAppMessageEvent.updateOne({ _id: doc._id }, { $set: set });
-    if (classification.retryable) {
-      await scheduleRetryPromotion(doc.retryGroupId as Types.ObjectId, doc.attemptNumber);
-    } else {
+    const attemptNumber = Number(doc.attemptNumber || 1);
+    const canRetry =
+      Boolean(doc.retryGroupId) &&
+      attemptNumber < MAX_AUTO_ATTEMPTS &&
+      classification.metaNote !== "opted_out";
+    if (canRetry) {
+      await scheduleRetryPromotion(doc.retryGroupId as Types.ObjectId, attemptNumber);
+    } else if (doc.retryGroupId) {
       await maybeSettleRetryGroup(doc.retryGroupId as Types.ObjectId);
     }
     return { received: true, status: newStatus };

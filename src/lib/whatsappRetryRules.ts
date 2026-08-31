@@ -16,8 +16,8 @@ export type RetryExclusionReason = (typeof RETRY_EXCLUSION_REASONS)[number];
 
 export const MAX_AUTO_ATTEMPTS = 3;
 export const RETRY_DELAY_MS_AFTER_ATTEMPT: Record<number, number> = {
-  1: 60_000,
-  2: 120_000,
+  1: 0,
+  2: 0,
 };
 
 export const TERMINAL_SUCCESS_STATUSES = ["delivered", "read"] as const;
@@ -50,25 +50,18 @@ const INFRASTRUCTURE_SEND_FAILURE_PATTERNS = [
 const META_PERMANENT_ERROR_CODES = new Set(["131047", "131048", "131049"]);
 
 const PERMANENT_FAILURE_PATTERNS = [
-  /invalid/i,
   /not whatsapp/i,
   /no whatsapp/i,
-  /whatsapp.*disabled/i,
-  /disabled.*whatsapp/i,
   /user.*not.*registered/i,
   /not.*registered.*whatsapp/i,
   /opt.?out/i,
   /blocked/i,
   /blacklist/i,
   /does not exist/i,
-  /rejected/i,
-  /policy/i,
-  /undeliverable/i,
   /unregistered/i,
   /ecosystem engagement/i,
   /healthy ecosystem/i,
   /re-engagement/i,
-  /spam rate limit/i,
 ];
 
 export type FailureContext = {
@@ -158,19 +151,13 @@ export const classifyCampaignFailure = (
   const transient = hay ? TRANSIENT_FAILURE_PATTERNS.some((rx) => rx.test(hay)) : false;
 
   if (afterProviderAccept) {
-    if (transient && hasAttemptsLeft) {
-      return {
-        retryable: true,
-        terminalFailureKind: "transient",
-        exclusionReason: null,
-        metaNote: "webhook_failed_after_provider_accept_transient",
-      };
-    }
     return {
-      retryable: hasAttemptsLeft && !hay,
-      terminalFailureKind: transient ? "transient" : "permanent",
+      retryable: hasAttemptsLeft,
+      terminalFailureKind: "transient",
       exclusionReason: hasAttemptsLeft ? null : RETRY_EXCLUSION_REASON.dlrFailedAfterAccept,
-      metaNote: "webhook_failed_after_provider_accept",
+      metaNote: transient
+        ? "webhook_failed_after_provider_accept_transient"
+        : "webhook_failed_after_provider_accept",
     };
   }
 

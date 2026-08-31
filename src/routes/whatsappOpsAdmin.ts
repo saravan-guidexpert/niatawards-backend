@@ -13,6 +13,7 @@ import {
   toPhone10,
 } from "../lib/gupshup";
 import { sendWhatsApp } from "../lib/whatsappSend";
+import { scanGroupsNeedingRetries } from "../lib/whatsappRetryOrchestrator";
 import { IN_FLIGHT_STATUSES, TERMINAL_SUCCESS_STATUSES } from "../lib/whatsappRetryRules";
 import {
   TEACHER_SUBMIT_POSTER_URL,
@@ -426,6 +427,16 @@ router.get("/cron", async (_req: Request, res: Response) => {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load cron health";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post("/actions/run-retries", requireSuperAdmin, async (_req: Request, res: Response) => {
+  try {
+    const result = await scanGroupsNeedingRetries();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Retry sweep failed";
     res.status(500).json({ error: message });
   }
 });

@@ -1,6 +1,6 @@
 import { WhatsAppMessageEvent } from "../models/WhatsAppMessageEvent";
 import { maskPhone, toPhone10 } from "./gupshup";
-import { sendWhatsApp, type SendWhatsAppResult } from "./whatsappSend";
+import { sendWhatsApp } from "./whatsappSend";
 
 /** New sends use this kind. The Gupshup template id still lives in GUPSHUP_TEMPLATE_TEACHER_SUBMIT. */
 export const STUDENT_NOMINATE_WHATSAPP_KIND = "student_nominate";
@@ -54,13 +54,6 @@ const studentDisplayName = (nomination: StudentNominateNomination) => {
 const studentPhone = (nomination: StudentNominateNomination) =>
   toPhone10(nomination.nominator_phone || "");
 
-const shouldImmediateRetry = (result: SendWhatsAppResult) => {
-  if (result.success || result.duplicate) return false;
-  const error = String(result.error || "");
-  if (error === "Recipient opted out (STOP)" || error === "Invalid phone") return false;
-  return Boolean(result.retryGroupId);
-};
-
 export type TeacherWhatsAppStatus = {
   status: string;
   attemptNumber: number;
@@ -93,42 +86,27 @@ export const latestTeacherSubmitStatusByPhones = async (phones: string[]) => {
   return out;
 };
 
-/** Sends the student-nominate template immediately. On failure, retries once. Never throws. */
+/** Sends the student-nominate template immediately. Failures retry via the send pipeline. Never throws. */
 export const notifyStudentOnNominate = async (nomination: StudentNominateNomination | null | undefined) => {
   if (!nomination || nomination.type !== "student") return;
   const phone = studentPhone(nomination);
   if (!/^\d{10}$/.test(phone)) return;
 
   const name = studentDisplayName(nomination);
-  const payload = {
-    kind: STUDENT_NOMINATE_WHATSAPP_KIND,
-    phone,
-    params: studentNominateTemplateParams(name),
-    source: "api" as const,
-    headerImageUrl: TEACHER_SUBMIT_POSTER_URL,
-  };
-
   try {
-    const first = await sendWhatsApp({ ...payload, attemptNumber: 1 });
+    const first = await sendWhatsApp({
+      kind: STUDENT_NOMINATE_WHATSAPP_KIND,
+      phone,
+      params: studentNominateTemplateParams(name),
+      source: "api",
+      headerImageUrl: TEACHER_SUBMIT_POSTER_URL,
+      attemptNumber: 1,
+    });
     if (first.success) {
       console.log("[WhatsApp] student_nominate submitted", maskPhone(phone), first.eventId);
       return;
     }
     console.error("[WhatsApp] student_nominate failed", maskPhone(phone), first.error);
-
-    if (!shouldImmediateRetry(first)) return;
-
-    const second = await sendWhatsApp({
-      ...payload,
-      attemptNumber: 2,
-      retryGroupId: first.retryGroupId,
-      parentMessageEventId: first.eventId,
-    });
-    if (second.success) {
-      console.log("[WhatsApp] student_nominate retry submitted", maskPhone(phone), second.eventId);
-      return;
-    }
-    console.error("[WhatsApp] student_nominate retry failed", maskPhone(phone), second.error);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[WhatsApp] student_nominate exception", maskPhone(phone), message);
