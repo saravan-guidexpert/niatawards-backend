@@ -15,6 +15,7 @@ import utmRoutes from "./routes/utm";
 import funnelRoutes from "./routes/funnel";
 import gupshupWebhookRoutes from "./routes/gupshupWebhook";
 import cronRoutes from "./routes/cron";
+import nominationVideoRoutes from "./routes/nominationVideos";
 import { seedSuperAdmin } from "./lib/seedSuperAdmin";
 import { Nomination } from "./models/Nomination";
 import { OtpVerification } from "./models/OtpVerification";
@@ -84,6 +85,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use("/api/utm", utmRoutes);
 app.use("/api/funnel", funnelRoutes);
+app.use("/api/nomination-videos", nominationVideoRoutes);
 
 const start = async () => {
   await connectDB();

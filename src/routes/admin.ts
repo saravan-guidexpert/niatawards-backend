@@ -31,6 +31,7 @@ import {
   slugifyDigitalField,
 } from "../lib/digitalCampaign";
 import whatsappOpsAdminRoutes from "./whatsappOpsAdmin";
+import videoReviewAdminRoutes from "./videoReviewAdmin";
 
 const router = Router();
 
@@ -105,6 +106,7 @@ router.post("/login", async (req: Request, res: Response) => {
 router.use(adminAuth);
 
 router.use("/whatsapp-ops", requirePermission("whatsapp"), whatsappOpsAdminRoutes);
+router.use("/video-reviews", requirePermission("nominations"), videoReviewAdminRoutes);
 
 router.get("/me", (req: Request, res: Response) => {
   res.json({ user: req.admin });
