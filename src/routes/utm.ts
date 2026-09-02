@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
-import { PromoLink } from "../models/PromoLink";
+import { isDigitalMedium } from "../lib/digitalCampaign";
 import { DigitalCampaignLink } from "../models/DigitalCampaignLink";
+import { DESTINATIONS, PLATFORMS, PromoLink } from "../models/PromoLink";
 
 const router = Router();
 
@@ -8,12 +9,19 @@ const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$
 
 const TRACKED_DESTINATIONS = new Set(["/", "/nominate-student", "/nominate-teacher"]);
 
+const isPromoPlatform = (value: string): value is (typeof PLATFORMS)[number] =>
+  (PLATFORMS as readonly string[]).includes(value);
+
+const isTrackedDestination = (value: string): value is (typeof DESTINATIONS)[number] =>
+  (DESTINATIONS as readonly string[]).includes(value);
+
 router.post("/hit", async (req: Request, res: Response) => {
   try {
     const source = String(req.body?.utm_source ?? "").trim().toLowerCase().slice(0, 80);
     const medium = String(req.body?.utm_medium ?? "").trim().toLowerCase().slice(0, 80);
     const campaign = String(req.body?.utm_campaign ?? "").trim().slice(0, 256);
     const destination = String(req.body?.destination ?? "").trim();
+    const content = String(req.body?.utm_content ?? "").trim().slice(0, 120);
 
     if (!source || !medium || !campaign) {
       res.json({ ok: true, matched: false });
@@ -43,6 +51,43 @@ router.post("/hit", async (req: Request, res: Response) => {
           { $inc: { views: 1 }, $set: { last_click_at: new Date() } },
           { new: true }
         );
+      }
+      if (!link && isPromoPlatform(source) && !isDigitalMedium(medium)) {
+        const landing = dest && isTrackedDestination(dest) ? dest : "/";
+        const influencer_name = content || medium.replace(/_/g, " ");
+        try {
+          link = await PromoLink.findOneAndUpdate(
+            {
+              influencer_slug: medium,
+              platform: source,
+              campaign,
+              destination: landing,
+            },
+            {
+              $setOnInsert: {
+                influencer_name,
+                influencer_slug: medium,
+                platform: source,
+                campaign,
+                destination: landing,
+              },
+              $inc: { views: 1 },
+              $set: { last_click_at: new Date() },
+            },
+            { upsert: true, new: true }
+          );
+        } catch (err) {
+          const code = err && typeof err === "object" && "code" in err ? (err as { code?: number }).code : undefined;
+          if (code === 11000) {
+            link = await PromoLink.findOneAndUpdate(
+              { influencer_slug: medium, platform: source, campaign, destination: landing },
+              { $inc: { views: 1 }, $set: { last_click_at: new Date() } },
+              { new: true }
+            );
+          } else {
+            throw err;
+          }
+        }
       }
       return Boolean(link);
     };
