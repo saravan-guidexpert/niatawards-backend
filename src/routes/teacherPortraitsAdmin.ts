@@ -43,6 +43,8 @@ router.get("/summary", async (_req: Request, res: Response) => {
       const videos = emptyVideoCounts();
       const videoTeachers = emptyVideoTeacherCounts();
       let nominations = 0;
+      let notGeneratedFinalizedNoms = 0;
+      let notGeneratedNoPhotoNoms = 0;
       for (const teacher of teachers) {
         const item = teacherListItem(teacher, portraitsMap.get(teacher.phone), videosMap, live, nomsByPhone.get(teacher.phone));
         status[item.portrait_status] += 1;
@@ -52,8 +54,17 @@ router.get("/summary", async (_req: Request, res: Response) => {
         videos.processing += item.videos.processing;
         videos.failed += item.videos.failed;
         videos.total += item.videos.total;
-        if (item.videos.total > 0 && item.videos.generated === item.videos.total) videoTeachers.generated += 1;
+        const remaining = Math.max(0, item.videos.total - item.videos.generated);
+        if (item.videos.total > 0 && remaining === 0) videoTeachers.generated += 1;
         else videoTeachers.not_generated += 1;
+        if (remaining > 0 && cat.photo === "with_photo" && item.portrait_status === "GENERATED") {
+          videoTeachers.not_generated_finalized += 1;
+          notGeneratedFinalizedNoms += remaining;
+        }
+        if (remaining > 0 && cat.photo === "without_photo") {
+          videoTeachers.not_generated_no_photo += 1;
+          notGeneratedNoPhotoNoms += remaining;
+        }
         if (item.videos.processing > 0) videoTeachers.processing += 1;
         if (item.videos.failed > 0) videoTeachers.failed += 1;
       }
@@ -69,6 +80,8 @@ router.get("/summary", async (_req: Request, res: Response) => {
         videos: {
           ...videos,
           not_generated: Math.max(0, videos.total - videos.generated),
+          not_generated_finalized: notGeneratedFinalizedNoms,
+          not_generated_no_photo: notGeneratedNoPhotoNoms,
           teachers: videoTeachers,
         },
         images_finalized: cat.photo === "with_photo" ? status.GENERATED : teachers.length,
@@ -79,20 +92,31 @@ router.get("/summary", async (_req: Request, res: Response) => {
       };
     });
     const kinds = NOMINATION_KINDS.map((kind) => {
-      const cats = IMAGE_MANAGEMENT_CATEGORIES.filter((cat) => cat.kind === kind);
+      const catRows = categories.filter((row) => row.kind === kind);
+      const meta = IMAGE_MANAGEMENT_CATEGORIES.filter((cat) => cat.kind === kind);
       const phones = new Set<string>();
-      let nominations = 0;
-      for (const cat of cats) {
+      for (const cat of meta) {
         for (const teacher of buckets.get(cat.id)?.values() || []) {
           phones.add(teacher.phone);
-          nominations += teacher.nomination_count;
         }
       }
+      const withPhoto = catRows.find((row) => row.photo === "with_photo");
+      const withoutPhoto = catRows.find((row) => row.photo === "without_photo");
       return {
         kind,
-        group: cats[0]?.group || kind,
-        nominations,
+        group: meta[0]?.group || kind,
+        nominations: catRows.reduce((sum, row) => sum + row.nominations, 0),
         unique_teachers: phones.size,
+        with_photo: withPhoto?.unique_teachers ?? 0,
+        without_photo: withoutPhoto?.unique_teachers ?? 0,
+        with_photo_nominations: withPhoto?.nominations ?? 0,
+        without_photo_nominations: withoutPhoto?.nominations ?? 0,
+        images_finalized: withPhoto?.images_finalized ?? 0,
+        images_missing: withPhoto?.images_pending ?? 0,
+        videos_generated: catRows.reduce((sum, row) => sum + (row.videos?.generated || 0), 0),
+        videos_queued: catRows.reduce((sum, row) => sum + (row.videos?.pending || 0), 0),
+        videos_processing: catRows.reduce((sum, row) => sum + (row.videos?.processing || 0), 0),
+        videos_failed: catRows.reduce((sum, row) => sum + (row.videos?.failed || 0), 0),
       };
     });
     res.json({ categories, kinds });
@@ -120,7 +144,7 @@ router.get("/", async (req: Request, res: Response) => {
     );
 
     if (statusFilter) items = items.filter((row) => row.portrait_status === statusFilter);
-    if (videoStatus) items = items.filter((row) => matchesVideoAdminFilter(row.videos, videoStatus));
+    if (videoStatus) items = items.filter((row) => matchesVideoAdminFilter(row, videoStatus));
     if (q) {
       items = items.filter(
         (row) => row.name.toLowerCase().includes(q) || row.phone.includes(q)

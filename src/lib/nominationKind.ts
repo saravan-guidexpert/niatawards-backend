@@ -66,8 +66,33 @@ export const usableTeacherPhone = (value: unknown) => {
   return phone;
 };
 
+export const KIND_GROUP_LABEL: Record<NominationKind, string> = {
+  student: "Student nominated teacher",
+  teacher: "Teacher nominated teacher",
+  colleague: "Teacher nominated other teacher",
+};
+
 export const categoryIdOf = (kind: NominationKind, photo: PhotoState): ImageManagementCategoryId =>
   `${kind}_${photo}` as ImageManagementCategoryId;
+
+export const exactCategoryOf = (kind: NominationKind, photo: PhotoState) =>
+  `${KIND_GROUP_LABEL[kind]} · ${photo === "with_photo" ? "With photo" : "Without photo"}`;
+
+/** Student nominations keep the student-nominated renderer. Teacher-self and colleague share one template. */
+export const STUDENT_VIDEO_TEMPLATE = "student-nominated" as const;
+export const TEACHER_NOMINATION_TEMPLATE = "teacher-nominated-teacher" as const;
+export const VIDEO_TEMPLATES = [STUDENT_VIDEO_TEMPLATE, TEACHER_NOMINATION_TEMPLATE] as const;
+export type VideoTemplateVariant = (typeof VIDEO_TEMPLATES)[number];
+
+export const videoTemplateOf = (
+  input: NominationKind | { type?: unknown; student_class?: unknown }
+): VideoTemplateVariant => {
+  const kind = typeof input === "string" ? input : nominationKind(input);
+  return kind === "student" ? STUDENT_VIDEO_TEMPLATE : TEACHER_NOMINATION_TEMPLATE;
+};
+
+export const templatePlacesCategoryIcon = (variant: VideoTemplateVariant) =>
+  variant === STUDENT_VIDEO_TEMPLATE;
 
 export const isFinalizedPortrait = (portrait: {
   portrait_status?: unknown;

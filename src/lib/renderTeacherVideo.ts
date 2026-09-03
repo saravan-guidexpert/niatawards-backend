@@ -4,6 +4,7 @@ import path from "path";
 import { spawn, spawnSync } from "child_process";
 import { v2 as cloudinary } from "cloudinary";
 import { listCategoryIcons } from "./categoryIcons";
+import { STUDENT_VIDEO_TEMPLATE, TEACHER_NOMINATION_TEMPLATE, type VideoTemplateVariant } from "./nominationKind";
 import { bgRemoveRoot, nominationVideoDir } from "./projectPaths";
 import { portraitPreviewPath, teacherPortraitDir } from "./teacherPortrait";
 
@@ -155,6 +156,7 @@ export type RenderTeacherVideoInput = {
   categoryIconPath?: string | null;
   categoryIconId?: string | null;
   categoryIconFilename?: string | null;
+  variant?: VideoTemplateVariant;
 };
 
 export type RenderTeacherVideoResult = {
@@ -182,7 +184,7 @@ const runPythonEncode = (root: string, jobPath: string) =>
     });
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-    }, 120_000);
+    }, 180_000);
     child.on("error", (err) => {
       clearTimeout(timer);
       reject(err);
@@ -221,6 +223,7 @@ export const encodeTeacherVideo = async (
     category_icon_filename: String(input.categoryIconFilename || "").trim(),
     audio_path: soundtrackPath(root),
     photo_url: "",
+    variant: input.variant === TEACHER_NOMINATION_TEMPLATE ? TEACHER_NOMINATION_TEMPLATE : STUDENT_VIDEO_TEMPLATE,
   };
   fs.writeFileSync(paths.jobPath, JSON.stringify(job, null, 2));
 

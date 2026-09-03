@@ -18,7 +18,11 @@ export const loadAdminTeacherCatalog = async () => {
       .select("_id type student_class phone teacher_name full_name nominator_name photo_url created_at")
       .lean(),
     TeacherPortrait.find({}).lean(),
-    NominationVideo.find({}).select("nomination_id generation_status video_url category_icon_id category_icon_filename").lean(),
+    NominationVideo.find({})
+      .select(
+        "nomination_id generation_status video_url video_render_id category_icon_id category_icon_filename nomination_kind video_template"
+      )
+      .lean(),
     activeLiveStatuses(),
   ]);
   const buckets = buildCategoryTeachers(nominations as CatalogNomination[]);

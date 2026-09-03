@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
 import path from "path";
-import { loadBackendEnv, bgRemoveRoot, firstEnv } from "./lib/projectPaths";
+import { loadBackendEnv, findBgRemoveRoot, firstEnv } from "./lib/projectPaths";
 
 const envFile = loadBackendEnv();
 if (envFile) dotenv.config({ path: envFile });
@@ -117,11 +117,8 @@ const start = async () => {
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`OpenAI API key: ${firstEnv("OPENAI_API_KEY", "LLM_API_KEY") ? "loaded" : "MISSING"}`);
-    try {
-      console.log(`bg-remove: ${bgRemoveRoot()}`);
-    } catch (err) {
-      console.error(err instanceof Error ? err.message : err);
-    }
+    const bgRemove = findBgRemoveRoot();
+    console.log(bgRemove ? `bg-remove: ${bgRemove}` : "bg-remove: not on this host (video queue only)");
   });
 };
 

@@ -11,7 +11,17 @@ import {
 import { TeacherPortrait } from "../models/TeacherPortrait";
 import type { VideoFailureStage } from "../models/VideoGenerationJob";
 import { rasterizeCategoryIcon, resolveCategoryIcon } from "./categoryIcons";
-import { isFinalizedPortrait, teacherDisplayName, usableTeacherPhone } from "./nominationKind";
+import {
+  STUDENT_VIDEO_TEMPLATE,
+  isFinalizedPortrait,
+  nominationKind,
+  teacherDisplayName,
+  templatePlacesCategoryIcon,
+  usableTeacherPhone,
+  videoTemplateOf,
+  type VideoTemplateVariant,
+} from "./nominationKind";
+import { videoSatisfiesNomination } from "./videoIdentity";
 import {
   bgRemoveRoot,
   encodeTeacherVideo,
@@ -90,7 +100,16 @@ export const generateNominationVideo = async (opts: {
   }
 
   const existing = await NominationVideo.findOne({ nomination_id: nominationId }).lean();
-  if (isSuccessfulFinalVideo(existing) && !opts.regenerate) {
+  const expectedKind = nominationKind(nom);
+  const variant = videoTemplateOf(expectedKind);
+  if (
+    videoSatisfiesNomination({
+      video: existing,
+      nominationId,
+      expectedKind,
+    }) &&
+    !opts.regenerate
+  ) {
     return {
       nomination_id: nominationId,
       render_id: String(existing?.video_render_id || ""),
@@ -149,6 +168,8 @@ export const generateNominationVideo = async (opts: {
     category_icon_id: icon.category_icon_id,
     category_icon_filename: icon.category_icon_filename,
   });
+  // Teacher-nomination Frame 2 has no icon slot; still pick and store an icon in metadata.
+  const placeIcon = templatePlacesCategoryIcon(variant);
 
   let preparedPath = "";
   if (wantsPhoto) {
@@ -176,9 +197,10 @@ export const generateNominationVideo = async (opts: {
       nominatorName,
       renderId,
       preparedPortraitPath: preparedPath || null,
-      categoryIconPath: iconPng,
+      categoryIconPath: placeIcon ? iconPng : null,
       categoryIconId: icon.category_icon_id,
       categoryIconFilename: icon.category_icon_filename,
+      variant,
     });
   } catch (err) {
     throw new VideoPipelineError(
@@ -240,6 +262,8 @@ export const generateNominationVideo = async (opts: {
           audio_filename: PRODUCTION_AUDIO_FILENAME,
           production_batch_id: PRODUCTION_VIDEO_BATCH_ID,
           generation_job_id: opts.jobId ? String(opts.jobId) : null,
+          nomination_kind: expectedKind,
+          video_template: variant,
         },
       },
       { upsert: true, new: true }
@@ -292,17 +316,20 @@ export const composeNominationPreview = async (opts: {
   preparedPortraitPath?: string | null;
   categoryIconPath: string;
   outputPath: string;
+  variant?: VideoTemplateVariant;
 }) => {
   const root = bgRemoveRoot();
   const jobPath = `${opts.outputPath}.job.json`;
   fs.mkdirSync(path.dirname(opts.outputPath), { recursive: true });
+  const variant = opts.variant || STUDENT_VIDEO_TEMPLATE;
   fs.writeFileSync(
     jobPath,
     JSON.stringify(
       {
         teacher_name: opts.teacherName,
         prepared_portrait_path: String(opts.preparedPortraitPath || ""),
-        category_icon_path: opts.categoryIconPath,
+        category_icon_path: templatePlacesCategoryIcon(variant) ? opts.categoryIconPath : "",
+        variant,
         output: opts.outputPath,
       },
       null,

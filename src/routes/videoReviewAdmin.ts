@@ -2,14 +2,14 @@ import { Router, Request, Response } from "express";
 import { Nomination } from "../models/Nomination";
 import { NominationVideo } from "../models/NominationVideo";
 import { TeacherPortrait } from "../models/TeacherPortrait";
-import {
-  isEligibleStudentVideo,
-  isSubmittedStudentNomination,
-} from "../lib/studentVideoEligibility";
 import { loadPortraitReview } from "../lib/teacherPortrait";
 import { phone10, resolveTeacherPortrait } from "../lib/resolveTeacherPortrait";
 import { hasSourcePhoto, intendedVideoCategory } from "../lib/sourcePhoto";
-import { isSubmittedNomination, nominationKind, photoStateOf } from "../lib/nominationKind";
+import { isSubmittedNomination, nominationKind, photoStateOf, teacherDisplayName, exactCategoryOf, IMAGE_MANAGEMENT_CATEGORIES, usableTeacherPhone, videoTemplateOf } from "../lib/nominationKind";
+import {
+  videoIdentityMismatch,
+  videoSatisfiesNomination,
+} from "../lib/videoIdentity";
 
 const router = Router();
 
@@ -34,14 +34,44 @@ const toReviewItem = (
   video: Record<string, unknown> | null,
   teacherPortrait: Record<string, unknown> | null
 ) => {
-  const eligible = isEligibleStudentVideo(nomination);
+  const eligible = isSubmittedNomination(nomination);
   const photoProvided = hasSourcePhoto(nomination.photo_url);
   const intendedCategory = intendedVideoCategory(nomination.photo_url);
-  const videoUrl = video?.video_url ?? null;
+  const kind = nominationKind(nomination);
+  const photoState = photoStateOf(nomination.photo_url);
+  const nominationId = String(nomination.id || "");
+  const identityMismatch = video
+    ? videoIdentityMismatch({
+        video,
+        nominationId,
+        expectedKind: kind,
+      })
+    : null;
+  const satisfies = videoSatisfiesNomination({
+    video,
+    nominationId,
+    expectedKind: kind,
+  });
+  const videoUrl = satisfies ? video?.video_url ?? null : null;
   const generationStatus = eligible
-    ? String(video?.generation_status || "pending")
+    ? satisfies
+      ? String(video?.generation_status || "pending")
+      : String(video?.generation_status || "") === "failed"
+        ? "failed"
+        : "pending"
     : "not_eligible";
-  const reviewStatus = eligible ? String(video?.review_status || "none") : "not_eligible";
+  const renderedCategory = satisfies &&
+    (video?.video_category === "with_photo" || video?.video_category === "without_photo")
+      ? String(video.video_category)
+      : null;
+  const photoUsedInVideo = Boolean(satisfies && video?.photo_used);
+  const categoryMismatch = satisfies && photoProvided && (renderedCategory === "without_photo" || video?.photo_used === false);
+
+  const reviewStatus = eligible
+    ? satisfies
+      ? String(video?.review_status || "none")
+      : "none"
+    : "not_eligible";
   const localPortrait = loadPortraitReview(String(nomination.id), photoProvided);
   const resolved = resolveTeacherPortrait(nomination, teacherPortrait);
   const cloudinaryUrl = resolved.usable ? resolved.portrait_cloudinary_url || "" : "";
@@ -50,16 +80,10 @@ const toReviewItem = (
     photoProvided
   );
 
-  const renderedCategory =
-    video?.video_category === "with_photo" || video?.video_category === "without_photo"
-      ? String(video.video_category)
-      : null;
-  const photoUsedInVideo = Boolean(video?.photo_used);
-  const categoryMismatch = photoProvided && (renderedCategory === "without_photo" || video?.photo_used === false);
-
   return {
     nomination_id: nomination.id,
-    teacher_name: nomination.teacher_name || null,
+    video_id: video?.id ? String(video.id) : video?._id ? String(video._id) : null,
+    teacher_name: teacherDisplayName(nomination) || null,
     teacher_phone: resolved.teacher_phone || nomination.phone || null,
     portrait_phone: resolved.portrait_phone,
     portrait_mapping: resolved.mapping,
@@ -75,23 +99,27 @@ const toReviewItem = (
     nominator_name: nomination.nominator_name || null,
     nominator_phone: nomination.nominator_phone || null,
     nomination_type: nomination.type,
-    nomination_kind: nominationKind(nomination),
-    photo_state: photoStateOf(nomination.photo_url),
+    nomination_kind: kind,
+    photo_state: photoState,
+    exact_category: exactCategoryOf(kind, photoState),
+    video_template: satisfies ? videoTemplateOf(kind) : video?.video_template ? String(video.video_template) : null,
+    identity_mismatch: Boolean(identityMismatch),
+    identity_mismatch_reason: identityMismatch,
     student_class: nomination.student_class || null,
     created_at: nomination.created_at || null,
     eligible,
     generation_status: generationStatus,
     review_status: reviewStatus,
     video_url: hasPlayableVideo(videoUrl) ? videoUrl : null,
-    video_render_id: video?.video_render_id ? String(video.video_render_id) : null,
-    category_icon_id: video?.category_icon_id ? String(video.category_icon_id) : null,
-    category_icon_filename: video?.category_icon_filename ? String(video.category_icon_filename) : null,
-    audio_filename: video?.audio_filename ? String(video.audio_filename) : null,
-    generated_at: video?.generated_at || null,
-    approved_at: video?.approved_at || null,
-    rejected_at: video?.rejected_at || null,
-    rejection_reason: video?.rejection_reason || null,
-    ready_for_message: Boolean(video?.ready_for_message),
+    video_render_id: satisfies && video?.video_render_id ? String(video.video_render_id) : null,
+    category_icon_id: satisfies && video?.category_icon_id ? String(video.category_icon_id) : null,
+    category_icon_filename: satisfies && video?.category_icon_filename ? String(video.category_icon_filename) : null,
+    audio_filename: satisfies && video?.audio_filename ? String(video.audio_filename) : null,
+    generated_at: satisfies ? video?.generated_at || null : null,
+    approved_at: satisfies ? video?.approved_at || null : null,
+    rejected_at: satisfies ? video?.rejected_at || null : null,
+    rejection_reason: satisfies ? video?.rejection_reason || null : null,
+    ready_for_message: Boolean(satisfies && video?.ready_for_message),
     regenerate_available: false,
     portrait_status: !photoProvided
       ? "NOT_PROVIDED"
@@ -165,7 +193,24 @@ router.get("/", async (_req: Request, res: Response) => {
       colleague_without_photo: items.filter((i) => i.nomination_kind === "colleague" && i.photo_state === "without_photo").length,
     };
 
-    res.json({ items, counts });
+    const category_stats = IMAGE_MANAGEMENT_CATEGORIES.map((cat) => {
+      const rows = items.filter((i) => i.nomination_kind === cat.kind && i.photo_state === cat.photo);
+      const phones = new Set(rows.map((i) => usableTeacherPhone(i.teacher_phone)).filter(Boolean));
+      return {
+        id: cat.id,
+        kind: cat.kind,
+        photo: cat.photo,
+        label: exactCategoryOf(cat.kind, cat.photo),
+        nominations: rows.length,
+        unique_teachers: phones.size,
+        videos_generated: rows.filter((i) => i.generation_status === "generated" && i.video_url).length,
+        videos_queued: rows.filter((i) => i.generation_status === "pending").length,
+        videos_failed: rows.filter((i) => i.generation_status === "failed").length,
+        identity_mismatches: rows.filter((i) => i.identity_mismatch).length,
+      };
+    });
+
+    res.json({ items, counts, category_stats });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load video reviews";
     res.status(500).json({ error: message });
@@ -178,17 +223,19 @@ router.patch("/:nominationId", async (req: Request, res: Response) => {
     const action = String(req.body?.action || "").trim();
     const nomination = await Nomination.findById(nominationId);
 
-    if (!nomination || !isSubmittedStudentNomination(nomination)) {
+    if (!nomination || !isSubmittedNomination(nomination)) {
       res.status(404).json({ error: "Nomination not found" });
-      return;
-    }
-    if (!isEligibleStudentVideo(nomination)) {
-      res.status(400).json({ error: "Only submitted student nominations can be reviewed" });
       return;
     }
 
     let video = await NominationVideo.findOne({ nomination_id: nominationId });
-    const playable = hasPlayableVideo(video?.video_url);
+    const kind = nominationKind(nomination);
+    const satisfies = videoSatisfiesNomination({
+      video: video ? (video.toJSON() as Record<string, unknown>) : null,
+      nominationId,
+      expectedKind: kind,
+    });
+    const playable = satisfies && hasPlayableVideo(video?.video_url);
 
     if (action === "approve") {
       if (!video || !playable || video.generation_status !== "generated") {

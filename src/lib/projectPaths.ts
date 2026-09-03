@@ -59,10 +59,10 @@ const hasBgRemoveAssets = (dir: string) =>
   exists(path.join(dir, "assets", "teacher-student", "icons")) &&
   exists(path.join(dir, "generate_one_nomination.py"));
 
-let cachedBgRemoveRoot = "";
+let cachedBgRemoveRoot: string | null | undefined;
 
-export const bgRemoveRoot = () => {
-  if (cachedBgRemoveRoot) return cachedBgRemoveRoot;
+export const findBgRemoveRoot = (): string | null => {
+  if (cachedBgRemoveRoot !== undefined) return cachedBgRemoveRoot;
   const fromEnv = String(process.env.BG_REMOVE_ROOT || "").trim();
   const candidates = [
     ...(fromEnv ? [path.resolve(fromEnv)] : []),
@@ -72,13 +72,17 @@ export const bgRemoveRoot = () => {
     path.resolve(__dirname, "../../../bg-remove"),
     path.resolve(__dirname, "../../../../bg-remove"),
   ];
-  const found = candidates.find((dir) => hasBgRemoveAssets(dir));
+  cachedBgRemoveRoot = candidates.find((dir) => hasBgRemoveAssets(dir)) || null;
+  return cachedBgRemoveRoot;
+};
+
+export const bgRemoveRoot = () => {
+  const found = findBgRemoveRoot();
   if (!found) {
     throw new Error(
-      `bg-remove renderer assets not found. Set BG_REMOVE_ROOT to the bg-remove folder. Tried: ${candidates.join(", ")}`
+      "Video renderer assets are not on this host. Queueing still works; run the API next to the bg-remove folder (or set BG_REMOVE_ROOT) to encode."
     );
   }
-  cachedBgRemoveRoot = found;
   return found;
 };
 

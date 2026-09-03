@@ -23,8 +23,7 @@ const jsonTransform = (_doc: unknown, ret: Record<string, unknown>) => {
   return ret;
 };
 
-// One record per student nomination (Nomination._id). Created by the future
-// renderer when an MP4 exists. Admin review never creates a fake video_url.
+// One record per nomination (Nomination._id). Never keyed by teacher phone.
 const nominationVideoSchema = new Schema(
   {
     _id: { type: String, default: () => randomUUID() },
@@ -61,6 +60,14 @@ const nominationVideoSchema = new Schema(
     audio_filename: { type: String, default: null },
     production_batch_id: { type: String, default: null },
     generation_job_id: { type: String, default: null },
+    // Presentation kind of the nomination this video was rendered for.
+    nomination_kind: { type: String, default: null, enum: ["student", "teacher", "colleague", null] },
+    // Encoder variant. Same visual template for teacher-self and colleague still means two videos.
+    video_template: {
+      type: String,
+      default: null,
+      enum: ["student-nominated", "teacher-nominated-teacher", null],
+    },
   },
   {
     toJSON: { transform: jsonTransform },

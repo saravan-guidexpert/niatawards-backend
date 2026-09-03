@@ -9,11 +9,11 @@ import {
 import { PRODUCTION_AUDIO_FILENAME } from "../models/NominationVideo";
 import {
   generateNominationVideo,
-  isSuccessfulFinalVideo,
   markNominationVideoFailed,
   VideoPipelineError,
 } from "./generateNominationVideo";
 import { isFinalizedPortrait } from "./nominationKind";
+import { videoSatisfiesNomination } from "./videoIdentity";
 import { assertVideoRenderReady } from "./renderTeacherVideo";
 import type { CategoryTeacher, CatalogPortrait, CatalogVideo } from "./teacherPortraitCatalog";
 
@@ -61,7 +61,14 @@ export const planVideosForTeachers = (opts: {
     for (const nominationId of teacher.nomination_ids) {
       eligible += 1;
       const existing = opts.videos.get(nominationId);
-      if (!opts.regenerate && isSuccessfulFinalVideo(existing)) {
+      if (
+        !opts.regenerate &&
+        videoSatisfiesNomination({
+          video: existing,
+          nominationId,
+          expectedKind: teacher.kind,
+        })
+      ) {
         already += 1;
         continue;
       }

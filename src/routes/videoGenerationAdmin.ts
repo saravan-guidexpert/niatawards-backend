@@ -5,12 +5,15 @@ import {
   NOMINATION_KINDS,
   PHOTO_STATES,
   categoryIdOf,
+  exactCategoryOf,
   isFinalizedPortrait,
   teacherDisplayName,
   usableTeacherPhone,
+  videoTemplateOf,
   type NominationKind,
   type PhotoState,
 } from "../lib/nominationKind";
+import { videoSatisfiesNomination } from "../lib/videoIdentity";
 import { loadAdminTeacherCatalog } from "../lib/loadTeacherCatalog";
 import {
   assertVideoRenderReady,
@@ -22,7 +25,6 @@ import {
 import { rasterizeCategoryIcon, resolveCategoryIcon, categoryIconLabel } from "../lib/categoryIcons";
 import {
   composeNominationPreview,
-  hasPlayableVideoUrl,
 } from "../lib/generateNominationVideo";
 import { portraitConfigError } from "../lib/generateFinalizedPortrait";
 import {
@@ -47,6 +49,12 @@ const isKind = (value: unknown): value is NominationKind =>
 
 const isPhoto = (value: unknown): value is PhotoState =>
   PHOTO_STATES.includes(String(value) as PhotoState);
+
+const requireKindPhoto = (kindRaw: unknown, photoRaw: unknown) => {
+  const kind = isKind(kindRaw) ? kindRaw : null;
+  const photo = isPhoto(photoRaw) ? photoRaw : null;
+  return { kind, photo };
+};
 
 const phonesFromBody = (body: Record<string, unknown>) => {
   const raw = Array.isArray(body.phones) ? body.phones : body.phone ? [body.phone] : [];
@@ -128,10 +136,13 @@ router.get("/jobs/:id", async (req: Request, res: Response) => {
 router.post("/estimate", async (req: Request, res: Response) => {
   try {
     const body = (req.body || {}) as Record<string, unknown>;
-    const kind = isKind(body.kind) ? body.kind : "student";
-    const photo = isPhoto(body.photo) ? body.photo : "with_photo";
+    const { kind, photo } = requireKindPhoto(body.kind, body.photo);
     const regenerate = Boolean(body.regenerate);
     const phones = phonesFromBody(body);
+    if (!kind || !photo) {
+      res.status(400).json({ error: "kind and photo are required so videos stay in the selected category" });
+      return;
+    }
     if (!phones.length) {
       res.status(400).json({ error: "Select one or more teachers" });
       return;
@@ -166,10 +177,13 @@ router.post("/estimate", async (req: Request, res: Response) => {
 router.post("/jobs", async (req: Request, res: Response) => {
   try {
     const body = (req.body || {}) as Record<string, unknown>;
-    const kind = isKind(body.kind) ? body.kind : "student";
-    const photo = isPhoto(body.photo) ? body.photo : "with_photo";
+    const { kind, photo } = requireKindPhoto(body.kind, body.photo);
     const regenerate = Boolean(body.regenerate);
     const phones = phonesFromBody(body);
+    if (!kind || !photo) {
+      res.status(400).json({ error: "kind and photo are required so videos stay in the selected category" });
+      return;
+    }
     if (!phones.length) {
       res.status(400).json({ error: "Select one or more teachers" });
       return;
@@ -246,8 +260,11 @@ router.post("/jobs/:id/retry-failed", async (req: Request, res: Response) => {
 router.get("/videos", async (req: Request, res: Response) => {
   try {
     const phone = usableTeacherPhone(req.query.phone);
-    const kind = isKind(req.query.kind) ? req.query.kind : "student";
-    const photo = isPhoto(req.query.photo) ? req.query.photo : "with_photo";
+    const { kind, photo } = requireKindPhoto(req.query.kind, req.query.photo);
+    if (!kind || !photo) {
+      res.status(400).json({ error: "kind and photo are required so videos stay in the selected category" });
+      return;
+    }
     if (!phone) {
       res.status(400).json({ error: "A valid teacher phone is required" });
       return;
@@ -260,28 +277,44 @@ router.get("/videos", async (req: Request, res: Response) => {
     }
     const docs = await NominationVideo.find({
       nomination_id: { $in: teacher.nomination_ids },
-      generation_status: "generated",
     })
-      .select("nomination_id video_url video_render_id generated_at")
+      .select(
+        "nomination_id video_url video_render_id generated_at generation_status nomination_kind video_template"
+      )
       .lean();
     const byId = new Map(docs.map((doc) => [String(doc.nomination_id), doc]));
     const videos = teacher.nomination_ids.flatMap((nominationId) => {
       const doc = byId.get(nominationId);
+      if (
+        !videoSatisfiesNomination({
+          video: doc,
+          nominationId,
+          expectedKind: teacher.kind,
+        })
+      ) {
+        return [];
+      }
       const videoUrl = String(doc?.video_url || "").trim();
-      if (!doc || !hasPlayableVideoUrl(videoUrl)) return [];
       const nom = teacher.nominations.find((row) => String(row._id) === nominationId);
-      const renderId = String(doc.video_render_id || "").trim();
+      const renderId = String(doc?.video_render_id || "").trim();
       return [
         {
           nomination_id: nominationId,
+          video_id: doc?._id ? String(doc._id) : null,
           video_url: videoUrl,
           video_render_id: renderId || null,
-          generated_at: doc.generated_at ? new Date(doc.generated_at).toISOString() : null,
+          generated_at: doc?.generated_at ? new Date(doc.generated_at).toISOString() : null,
+          nomination_type: nom?.type ? String(nom.type) : null,
+          nomination_kind: teacher.kind,
+          exact_category: exactCategoryOf(teacher.kind, teacher.photo),
+          video_template: videoTemplateOf(teacher.kind),
+          teacher_name: nom ? teacherDisplayName(nom) || teacher.name : teacher.name,
+          teacher_phone: teacher.phone,
           label: nom ? teacherDisplayName(nom) || teacher.name : teacher.name,
         },
       ];
     });
-    res.json({ phone, name: teacher.name, videos });
+    res.json({ phone, name: teacher.name, kind, photo, videos });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load generated videos";
     res.status(500).json({ error: message });
@@ -291,8 +324,11 @@ router.get("/videos", async (req: Request, res: Response) => {
 router.get("/preview", async (req: Request, res: Response) => {
   try {
     const phone = usableTeacherPhone(req.query.phone);
-    const kind = isKind(req.query.kind) ? req.query.kind : "student";
-    const photo = isPhoto(req.query.photo) ? req.query.photo : "with_photo";
+    const { kind, photo } = requireKindPhoto(req.query.kind, req.query.photo);
+    if (!kind || !photo) {
+      res.status(400).json({ error: "kind and photo are required so videos stay in the selected category" });
+      return;
+    }
     if (!phone) {
       res.status(400).json({ error: "A valid teacher phone is required" });
       return;
@@ -346,7 +382,7 @@ router.get("/preview", async (req: Request, res: Response) => {
       preparedPortraitPath: preparedPath || null,
       categoryIconPath: iconPng,
       outputPath: dest,
-      variant: teacher.kind === "teacher" ? "teacher-nominated-teacher" : "student-nominated",
+      variant: videoTemplateOf(teacher.kind),
     });
     res.json({
       phone,

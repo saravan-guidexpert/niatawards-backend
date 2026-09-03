@@ -13,6 +13,7 @@ import {
   type PortraitAdminStatus,
 } from "./nominationKind";
 import { hasSourcePhoto } from "./sourcePhoto";
+import { videoSatisfiesNomination, type VideoIdentityRecord } from "./videoIdentity";
 
 export type CatalogNomination = {
   _id: string;
@@ -41,7 +42,7 @@ export type CatalogPortrait = {
   crop_version?: unknown;
 };
 
-export type CatalogVideo = {
+export type CatalogVideo = VideoIdentityRecord & {
   nomination_id: string;
   generation_status?: unknown;
   video_url?: unknown;
@@ -59,12 +60,21 @@ export type VideoCounts = {
   total: number;
 };
 
-export const VIDEO_ADMIN_FILTERS = ["generated", "not_generated", "processing", "failed"] as const;
+export const VIDEO_ADMIN_FILTERS = [
+  "generated",
+  "not_generated",
+  "not_generated_finalized",
+  "not_generated_no_photo",
+  "processing",
+  "failed",
+] as const;
 export type VideoAdminFilter = (typeof VIDEO_ADMIN_FILTERS)[number];
 
 export type VideoTeacherCounts = {
   generated: number;
   not_generated: number;
+  not_generated_finalized: number;
+  not_generated_no_photo: number;
   processing: number;
   failed: number;
 };
@@ -72,6 +82,8 @@ export type VideoTeacherCounts = {
 export const emptyVideoTeacherCounts = (): VideoTeacherCounts => ({
   generated: 0,
   not_generated: 0,
+  not_generated_finalized: 0,
+  not_generated_no_photo: 0,
   processing: 0,
   failed: 0,
 });
@@ -79,9 +91,20 @@ export const emptyVideoTeacherCounts = (): VideoTeacherCounts => ({
 export const isVideoAdminFilter = (value: unknown): value is VideoAdminFilter =>
   VIDEO_ADMIN_FILTERS.includes(String(value) as VideoAdminFilter);
 
-export const matchesVideoAdminFilter = (videos: VideoCounts, filter: VideoAdminFilter) => {
+export const matchesVideoAdminFilter = (
+  row: { photo: PhotoState; portrait_status: PortraitAdminStatus; videos: VideoCounts },
+  filter: VideoAdminFilter
+) => {
+  const videos = row.videos;
+  const remaining = videos.generated < videos.total;
   if (filter === "generated") return videos.total > 0 && videos.generated === videos.total;
-  if (filter === "not_generated") return videos.generated < videos.total;
+  if (filter === "not_generated") return remaining;
+  if (filter === "not_generated_finalized") {
+    return row.photo === "with_photo" && row.portrait_status === "GENERATED" && remaining;
+  }
+  if (filter === "not_generated_no_photo") {
+    return row.photo === "without_photo" && remaining;
+  }
   if (filter === "processing") return videos.processing > 0;
   if (filter === "failed") return videos.failed > 0;
   return true;
@@ -104,8 +127,6 @@ const timeOf = (value: unknown) => {
   return Number.isNaN(ms) ? 0 : ms;
 };
 
-const hasPlayableUrl = (url: unknown) => /^https?:\/\//i.test(String(url || "").trim());
-
 export const emptyVideoCounts = (): VideoCounts => ({
   generated: 0,
   pending: 0,
@@ -117,7 +138,8 @@ export const emptyVideoCounts = (): VideoCounts => ({
 export const videoCountsFor = (
   nominationIds: string[],
   videos: Map<string, CatalogVideo>,
-  live: Map<string, VideoLiveStatus>
+  live: Map<string, VideoLiveStatus>,
+  expectedKind: NominationKind
 ): VideoCounts => {
   const counts = emptyVideoCounts();
   counts.total = nominationIds.length;
@@ -128,7 +150,7 @@ export const videoCountsFor = (
       continue;
     }
     const video = videos.get(id);
-    if (String(video?.generation_status || "") === "generated" && hasPlayableUrl(video?.video_url)) {
+    if (videoSatisfiesNomination({ video, nominationId: id, expectedKind })) {
       counts.generated += 1;
     } else if (String(video?.generation_status || "") === "failed") {
       counts.failed += 1;
@@ -256,7 +278,12 @@ export const teacherListItem = (
     adminStatus === "NEEDS_REVIEW" && !sourceLocked
       ? photoCandidates(allNomsForPhone?.length ? allNomsForPhone : teacher.nominations)
       : [];
-  const videoCounts = videoCountsFor(teacher.nomination_ids, videos || new Map(), live || new Map());
+  const videoCounts = videoCountsFor(
+    teacher.nomination_ids,
+    videos || new Map(),
+    live || new Map(),
+    teacher.kind
+  );
   const imageReady = teacher.photo === "without_photo" || adminStatus === "GENERATED";
   return {
     phone: teacher.phone,
