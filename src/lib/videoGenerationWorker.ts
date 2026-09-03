@@ -209,6 +209,20 @@ export const retryFailedVideoJob = async (jobId: string, createdBy?: string | nu
   });
 };
 
+/**
+ * A render is killed after 2 minutes and Cloudinary times out at 3, so anything
+ * still PROCESSING past this window belongs to a worker that died.
+ */
+const STALE_ITEM_MS = 10 * 60 * 1000;
+
+const requeueStaleItems = async () => {
+  const result = await VideoGenerationJobItem.updateMany(
+    { status: "PROCESSING", started_at: { $lt: new Date(Date.now() - STALE_ITEM_MS) } },
+    { $set: { status: "QUEUED", started_at: null, error: "Requeued after a stalled render" } }
+  );
+  return Number(result?.modifiedCount || 0);
+};
+
 const claimNextItem = async () => {
   const running = await VideoGenerationJob.find({ status: "running", cancel_requested: { $ne: true } })
     .sort({ started_at: 1 })
@@ -314,15 +328,24 @@ export const kickVideoWorker = () => {
   if (pumping) return;
   pumping = true;
   void (async () => {
+    let crashed = false;
     try {
+      await requeueStaleItems();
       await Promise.all(Array.from({ length: CONCURRENCY }, () => workerLoop()));
       const running = await VideoGenerationJob.find({ status: "running" }).select("_id").lean();
       for (const job of running) await recountJob(job._id);
+    } catch (err) {
+      crashed = true;
+      console.error("[video-worker] pump failed", err);
     } finally {
       pumping = false;
-      const leftover = await VideoGenerationJobItem.exists({ status: "QUEUED" });
-      const running = await VideoGenerationJob.exists({ status: "running", cancel_requested: { $ne: true } });
-      if (leftover && running) kickVideoWorker();
+      const leftover = await VideoGenerationJobItem.exists({ status: "QUEUED" }).catch(() => false);
+      const running = await VideoGenerationJob.exists({
+        status: "running",
+        cancel_requested: { $ne: true },
+      }).catch(() => false);
+      // Back off after a crash so a persistent DB fault cannot spin the pump.
+      if (leftover && running) setTimeout(kickVideoWorker, crashed ? 15_000 : 0);
     }
   })();
 };

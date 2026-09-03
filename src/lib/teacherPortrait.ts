@@ -1,5 +1,8 @@
 import fs from "fs";
 import path from "path";
+import { teacherPortraitDir } from "./projectPaths";
+
+export { teacherPortraitDir } from "./projectPaths";
 
 export const PORTRAIT_STATUSES = [
   "NOT_STARTED",
@@ -11,9 +14,6 @@ export const PORTRAIT_STATUSES = [
 ] as const;
 
 export type PortraitStatus = (typeof PORTRAIT_STATUSES)[number];
-
-export const teacherPortraitDir = () =>
-  path.resolve(__dirname, "../../../bg-remove/output/teacher-portraits");
 
 export const portraitPngPath = (nominationId: string) =>
   path.join(teacherPortraitDir(), `${nominationId}.png`);

@@ -11,8 +11,10 @@ import { v2 as cloudinary } from "cloudinary";
 import { Nomination } from "../models/Nomination";
 import { TeacherPortrait } from "../models/TeacherPortrait";
 import { cropPortraitPng, CROP_VERSION } from "./applyApprovedPortraitCrop";
+import { firstEnv } from "./projectPaths";
 import {
   isFinalizedPortrait,
+  isStalePortraitClaim,
   teacherDisplayName,
   usableTeacherPhone,
 } from "./nominationKind";
@@ -72,18 +74,19 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const redact = (value: string) =>
   value.replace(/sk-[a-zA-Z0-9_\-]+/g, "[redacted]").replace(/Bearer\s+\S+/gi, "Bearer [redacted]");
 
+const TRANSIENT = /ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up|network|timed out|timeout|Connection error/i;
+
 const publicApiError = (err: unknown) => {
   if (err instanceof APIError) {
+    const message = redact(err.message || "");
     return {
-      openai_error: redact(err.message || ""),
-      retryable: err.status === 429 || (err.status ?? 0) >= 500,
+      openai_error: message,
+      // A connection error has no HTTP status; those are exactly the ones worth retrying.
+      retryable: err.status === 429 || (err.status ?? 0) >= 500 || (!err.status && TRANSIENT.test(message)),
     };
   }
   const message = redact(err instanceof Error ? err.message : String(err));
-  return {
-    openai_error: message,
-    retryable: /ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up|network/i.test(message),
-  };
+  return { openai_error: message, retryable: TRANSIENT.test(message) };
 };
 
 const cloudinaryErrorMessage = (err: unknown) => {
@@ -164,19 +167,43 @@ export const resolvePortraitSource = (
   return { kind: "no_photo" };
 };
 
-const STALE_PROCESSING_MS = 8 * 60 * 1000;
+export const portraitConfigError = () => {
+  if (!firstEnv("OPENAI_API_KEY", "LLM_API_KEY")) {
+    return "Missing OPENAI_API_KEY. Add it to backend/.env and restart the API.";
+  }
+  if (
+    !process.env.CLOUDINARY_CLOUD_NAME ||
+    !process.env.CLOUDINARY_API_KEY ||
+    !process.env.CLOUDINARY_API_SECRET
+  ) {
+    return "Cloudinary is not configured. Set CLOUDINARY_* in backend/.env and restart the API.";
+  }
+  return "";
+};
 
-const isActivelyGenerating = (existing: PortraitRow | null | undefined) => {
-  if (String(existing?.portrait_status || "") !== "PROCESSING") return false;
-  const raw = (existing as { updated_at?: unknown })?.updated_at;
-  const t = new Date(String(raw || "")).getTime();
-  if (!Number.isFinite(t)) return true;
-  return Date.now() - t < STALE_PROCESSING_MS;
+const isActivelyGenerating = (existing: PortraitRow | null | undefined) =>
+  String(existing?.portrait_status || "") === "PROCESSING" &&
+  !isStalePortraitClaim((existing as { updated_at?: unknown })?.updated_at);
+
+const fetchPhoto = async (photoUrl: string) => {
+  let lastError = "Failed to download photo_url";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(photoUrl, { signal: AbortSignal.timeout(30000) });
+      if (res.ok) return res;
+      lastError = `Failed to download photo_url (HTTP ${res.status})`;
+      // 4xx means the photo is genuinely gone; only host-side hiccups are worth another try.
+      if (res.status < 500) break;
+    } catch (err) {
+      lastError = `Failed to download photo_url (${err instanceof Error ? err.message : String(err)})`;
+    }
+    if (attempt < 2) await sleep(3000 * (attempt + 1));
+  }
+  throw new Error(lastError);
 };
 
 const downloadPhoto = async (photoUrl: string, destBase: string) => {
-  const res = await fetch(photoUrl, { signal: AbortSignal.timeout(30000) });
-  if (!res.ok) throw new Error(`Failed to download photo_url (HTTP ${res.status})`);
+  const res = await fetchPhoto(photoUrl);
   const buf = Buffer.from(await res.arrayBuffer());
   const contentType = String(res.headers.get("content-type") || "").split(";")[0].trim();
   const ext = contentType === "image/png" ? ".png" : contentType === "image/webp" ? ".webp" : ".jpg";
@@ -308,6 +335,13 @@ export const generateFinalizedPortrait = async (opts: {
     return { ok: true, skipped: true, reason: "already_finalized", phone };
   }
 
+  // Configuration problems are environment faults, not teacher faults: bail out
+  // before claiming PROCESSING so nobody is left stranded in FAILED.
+  const configError = portraitConfigError();
+  if (configError) {
+    return { ok: false, needs_review: false, phone, error: configError };
+  }
+
   const source = resolvePortraitSource(forPhone, existing, text(opts.source_nomination_id) || undefined);
   if (source.kind === "no_photo") {
     await TeacherPortrait.findOneAndUpdate(
@@ -350,14 +384,10 @@ export const generateFinalizedPortrait = async (opts: {
     return { ok: true, skipped: true, reason: "generating", phone };
   }
 
-  const apiKey = String(process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "").trim();
+  const apiKey = firstEnv("OPENAI_API_KEY", "LLM_API_KEY");
   const baseURL = String(
     process.env.OPENAI_BASE_URL || process.env.LLM_BASE_URL || "https://api.openai.com/v1"
   ).trim();
-  if (!apiKey) {
-    await markFailed(phone, name, "Missing OPENAI_API_KEY");
-    return { ok: false, needs_review: false, phone, error: "Missing OPENAI_API_KEY" };
-  }
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), `portrait-${phone}-`));
   try {

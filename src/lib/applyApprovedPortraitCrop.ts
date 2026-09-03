@@ -142,7 +142,10 @@ export const cropPortraitPng = (input: Buffer): { png: Buffer; geometry: CropGeo
   const [bl, bt, br, bb] = bbox;
   const sw = br - bl;
   const sh = bb - bt;
-  const x = Math.round(WELL_CX - sw / 2);
+  if (sw > CANVAS_W) throw new Error(`sprite width ${sw} exceeds canvas width ${CANVAS_W}`);
+  // Centering on the well pushes wide silhouettes past the left edge, which would
+  // silently clip the teacher. Slide it back on-canvas instead of losing pixels.
+  const x = Math.min(Math.max(Math.round(WELL_CX - sw / 2), 0), CANVAS_W - sw);
   const y = PHOTO_AREA_BOTTOM - sh;
   if (y < 0) throw new Error(`sprite height ${sh} exceeds photo-area bottom ${PHOTO_AREA_BOTTOM}`);
 

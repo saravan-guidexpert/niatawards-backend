@@ -1,14 +1,15 @@
 import { randomBytes } from "crypto";
 import fs from "fs";
 import path from "path";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { v2 as cloudinary } from "cloudinary";
-import { nominationVideoDir } from "../routes/nominationVideos";
+import { listCategoryIcons } from "./categoryIcons";
+import { bgRemoveRoot, nominationVideoDir } from "./projectPaths";
 import { portraitPreviewPath, teacherPortraitDir } from "./teacherPortrait";
 
-export const PRODUCTION_AUDIO_FILENAME = "nominated-by-students.mp3";
+export { bgRemoveRoot } from "./projectPaths";
 
-export const bgRemoveRoot = () => path.resolve(__dirname, "../../../bg-remove");
+export const PRODUCTION_AUDIO_FILENAME = "nominated-by-students.mp3";
 
 export const soundtrackPath = (root = bgRemoveRoot()) =>
   path.join(root, "assets", "teacher-student", "audio", PRODUCTION_AUDIO_FILENAME);
@@ -22,6 +23,31 @@ export const pythonBin = (root: string) => {
 
 export const publicApiBase = () =>
   (process.env.PUBLIC_API_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/$/, "");
+
+/**
+ * Fails fast when the renderer cannot possibly succeed, so a bad environment
+ * rejects one request instead of burning through a whole queue.
+ */
+export const assertVideoRenderReady = () => {
+  const root = bgRemoveRoot();
+  const script = path.join(root, "generate_one_nomination.py");
+  if (!fs.existsSync(script)) throw new Error(`renderer script missing: ${script}`);
+  const audio = soundtrackPath(root);
+  if (!fs.existsSync(audio)) throw new Error(`soundtrack missing: ${audio}`);
+  listCategoryIcons(root);
+  if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+    throw new Error("Cloudinary is not configured");
+  }
+  const probe = spawnSync(pythonBin(root), ["-c", "import PIL, numpy, imageio_ffmpeg"], {
+    cwd: root,
+    timeout: 20_000,
+  });
+  if (probe.status !== 0) {
+    const detail = String(probe.stderr || probe.error?.message || "").trim().slice(-400);
+    throw new Error(`renderer Python dependencies unavailable: ${detail || "unknown error"}`);
+  }
+  return root;
+};
 
 export const renderPaths = (root: string, nominationId: string, renderId: string) => {
   const renderDir = path.join(root, "work", "renders", nominationId, renderId);

@@ -1,7 +1,10 @@
 import dotenv from "dotenv";
 import path from "path";
+import { loadBackendEnv, bgRemoveRoot, firstEnv } from "./lib/projectPaths";
 
-dotenv.config({ path: path.resolve(__dirname, "../.env") });
+const envFile = loadBackendEnv();
+if (envFile) dotenv.config({ path: envFile });
+else dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 
 import express from "express";
 import cors from "cors";
@@ -113,6 +116,12 @@ const start = async () => {
   await startVideoGenerationWorker();
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+    console.log(`OpenAI API key: ${firstEnv("OPENAI_API_KEY", "LLM_API_KEY") ? "loaded" : "MISSING"}`);
+    try {
+      console.log(`bg-remove: ${bgRemoveRoot()}`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : err);
+    }
   });
 };
 

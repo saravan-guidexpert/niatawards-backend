@@ -76,12 +76,22 @@ export const isFinalizedPortrait = (portrait: {
   String(portrait?.portrait_status || "") === "GENERATED" &&
   Boolean(String(portrait?.cropped_cloudinary_url || "").trim());
 
+/** A claim older than this belongs to a run that died; it is no longer generating. */
+export const STALE_PORTRAIT_PROCESSING_MS = 8 * 60 * 1000;
+
+export const isStalePortraitClaim = (updatedAt: unknown) => {
+  const at = new Date(String(updatedAt || "")).getTime();
+  if (!Number.isFinite(at)) return true;
+  return Date.now() - at >= STALE_PORTRAIT_PROCESSING_MS;
+};
+
 export const mapPortraitAdminStatus = (
   portrait: {
     portrait_status?: unknown;
     cropped_cloudinary_url?: unknown;
     source_nomination_id?: unknown;
     portrait_error?: unknown;
+    updated_at?: unknown;
   } | null | undefined,
   categoryPhoto: PhotoState
 ): PortraitAdminStatus => {
@@ -89,7 +99,9 @@ export const mapPortraitAdminStatus = (
   if (!portrait) return "NOT_GENERATED";
   const status = String(portrait.portrait_status || "");
   if (status === "NOT_PROVIDED") return "NO_PHOTO";
-  if (status === "PROCESSING") return "GENERATING";
+  if (status === "PROCESSING") {
+    return isStalePortraitClaim(portrait.updated_at) ? "NOT_GENERATED" : "GENERATING";
+  }
   if (status === "FAILED") return "FAILED";
   if (isFinalizedPortrait(portrait)) return "GENERATED";
   if (status === "NEEDS_REVIEW") {

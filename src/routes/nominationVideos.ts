@@ -3,8 +3,7 @@ import fs from "fs";
 import { Router, Request, Response } from "express";
 import { portraitPngPath, portraitPreviewPath } from "../lib/teacherPortrait";
 
-export const nominationVideoDir = () =>
-  path.resolve(__dirname, "../../storage/nomination-videos");
+import { nominationVideoDir } from "../lib/projectPaths";
 
 const router = Router();
 

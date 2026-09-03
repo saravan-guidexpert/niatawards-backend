@@ -33,6 +33,7 @@ export type CatalogPortrait = {
   source_nomination_id?: unknown;
   source_photo_url?: unknown;
   cropped_cloudinary_url?: unknown;
+  updated_at?: unknown;
   portrait_status?: unknown;
   portrait_error?: unknown;
   generated_at?: Date | string | null;

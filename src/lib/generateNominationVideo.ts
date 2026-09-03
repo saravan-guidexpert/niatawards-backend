@@ -267,14 +267,18 @@ export const markNominationVideoFailed = async (
   error: string,
   jobId?: string | null
 ) => {
+  const existing = await NominationVideo.findOne({ nomination_id: nominationId })
+    .lean()
+    .catch(() => null);
+  // A failed regenerate must not throw away the video that is already live.
+  const keepExisting = isSuccessfulFinalVideo(existing);
   await NominationVideo.findOneAndUpdate(
     { nomination_id: nominationId },
     {
       $set: {
         nomination_id: nominationId,
-        generation_status: "failed",
+        ...(keepExisting ? {} : { generation_status: "failed", ready_for_message: false }),
         generation_error: error.slice(0, 2000),
-        ready_for_message: false,
         generation_job_id: jobId ? String(jobId) : null,
       },
     },

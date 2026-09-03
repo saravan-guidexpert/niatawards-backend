@@ -37,7 +37,11 @@ def crop_portrait(src: Image.Image) -> tuple[Image.Image, dict]:
         raise ValueError("empty teacher silhouette after top-60 crop")
     sprite = kept.crop(bbox)
     sw, sh = sprite.size
-    x = round(WELL_CX - sw / 2)
+    if sw > CANVAS[0]:
+        raise ValueError(f"sprite width {sw} exceeds canvas width {CANVAS[0]}")
+    # Centering on the well pushes wide silhouettes past the left edge, which would
+    # silently clip the teacher. Slide it back on-canvas instead of losing pixels.
+    x = min(max(round(WELL_CX - sw / 2), 0), CANVAS[0] - sw)
     y = PHOTO_AREA_BOTTOM - sh
     if y < 0:
         raise ValueError(f"sprite height {sh} exceeds photo-area bottom {PHOTO_AREA_BOTTOM}")

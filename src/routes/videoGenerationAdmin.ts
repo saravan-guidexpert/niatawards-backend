@@ -13,6 +13,7 @@ import {
 } from "../lib/nominationKind";
 import { loadAdminTeacherCatalog } from "../lib/loadTeacherCatalog";
 import {
+  assertVideoRenderReady,
   bgRemoveRoot,
   materializeCroppedPortrait,
   renderPaths,
@@ -22,6 +23,7 @@ import { rasterizeCategoryIcon, resolveCategoryIcon, categoryIconLabel } from ".
 import {
   composeNominationPreview,
 } from "../lib/generateNominationVideo";
+import { portraitConfigError } from "../lib/generateFinalizedPortrait";
 import {
   portraitPreviewPath,
   readPreviewIconMeta,
@@ -49,6 +51,33 @@ const phonesFromBody = (body: Record<string, unknown>) => {
   const raw = Array.isArray(body.phones) ? body.phones : body.phone ? [body.phone] : [];
   return [...new Set(raw.map((value) => usableTeacherPhone(value)).filter(Boolean))];
 };
+
+const renderNotReady = (res: Response) => {
+  try {
+    assertVideoRenderReady();
+    return false;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Video renderer is not ready";
+    res.status(503).json({ error: `Video renderer is not ready: ${message}` });
+    return true;
+  }
+};
+
+router.get("/readiness", (_req: Request, res: Response) => {
+  let videoError = "";
+  try {
+    assertVideoRenderReady();
+  } catch (err) {
+    videoError = err instanceof Error ? err.message : "Video renderer is not ready";
+  }
+  const portraitError = portraitConfigError();
+  res.json({
+    video_ready: !videoError,
+    video_error: videoError || null,
+    portrait_ready: !portraitError,
+    portrait_error: portraitError || null,
+  });
+});
 
 router.get("/jobs", async (_req: Request, res: Response) => {
   try {
@@ -147,6 +176,7 @@ router.post("/jobs", async (req: Request, res: Response) => {
       res.status(400).json({ error: "Select one or more teachers" });
       return;
     }
+    if (renderNotReady(res)) return;
     const { buckets, portraitsMap, videosMap } = await loadAdminTeacherCatalog();
     const categoryId = categoryIdOf(kind, photo);
     const teachers = phones
@@ -207,6 +237,7 @@ router.post("/jobs/:id/cancel", async (req: Request, res: Response) => {
 
 router.post("/jobs/:id/retry-failed", async (req: Request, res: Response) => {
   try {
+    if (renderNotReady(res)) return;
     const createdBy = req.admin?.username || req.admin?.id || null;
     const job = await retryFailedVideoJob(String(req.params.id || ""), createdBy);
     res.status(202).json({ job: jobPublicView(job.toObject()) });
