@@ -1,6 +1,4 @@
 import { Router, Request, Response } from "express";
-import { Nomination } from "../models/Nomination";
-import { TeacherPortrait } from "../models/TeacherPortrait";
 import { generateFinalizedPortrait } from "../lib/generateFinalizedPortrait";
 import {
   IMAGE_MANAGEMENT_CATEGORIES,
@@ -14,13 +12,14 @@ import {
   type PortraitAdminStatus,
 } from "../lib/nominationKind";
 import {
-  buildCategoryTeachers,
   emptyStatusCounts,
-  portraitByPhone,
+  emptyVideoCounts,
+  emptyVideoTeacherCounts,
+  isVideoAdminFilter,
+  matchesVideoAdminFilter,
   teacherListItem,
-  type CatalogNomination,
-  type CatalogPortrait,
 } from "../lib/teacherPortraitCatalog";
+import { loadAdminTeacherCatalog } from "../lib/loadTeacherCatalog";
 
 const router = Router();
 
@@ -35,29 +34,28 @@ const isPhoto = (value: unknown): value is PhotoState =>
 const isAdminStatus = (value: unknown): value is PortraitAdminStatus =>
   PORTRAIT_ADMIN_STATUSES.includes(String(value) as PortraitAdminStatus);
 
-const loadCatalog = async () => {
-  const [nominations, portraits] = await Promise.all([
-    Nomination.find({ status: { $ne: "draft" } })
-      .select("_id type student_class phone teacher_name full_name nominator_name photo_url created_at")
-      .lean(),
-    TeacherPortrait.find({}).lean(),
-  ]);
-  const buckets = buildCategoryTeachers(nominations as CatalogNomination[]);
-  const portraitsMap = portraitByPhone(portraits as CatalogPortrait[]);
-  return { buckets, portraitsMap };
-};
-
 router.get("/summary", async (_req: Request, res: Response) => {
   try {
-    const { buckets, portraitsMap } = await loadCatalog();
+    const { buckets, portraitsMap, videosMap, live, nomsByPhone } = await loadAdminTeacherCatalog();
     const categories = IMAGE_MANAGEMENT_CATEGORIES.map((cat) => {
       const teachers = [...(buckets.get(cat.id)?.values() || [])];
       const status = emptyStatusCounts();
+      const videos = emptyVideoCounts();
+      const videoTeachers = emptyVideoTeacherCounts();
       let nominations = 0;
       for (const teacher of teachers) {
-        const item = teacherListItem(teacher, portraitsMap.get(teacher.phone));
+        const item = teacherListItem(teacher, portraitsMap.get(teacher.phone), videosMap, live, nomsByPhone.get(teacher.phone));
         status[item.portrait_status] += 1;
         nominations += teacher.nomination_count;
+        videos.generated += item.videos.generated;
+        videos.pending += item.videos.pending;
+        videos.processing += item.videos.processing;
+        videos.failed += item.videos.failed;
+        videos.total += item.videos.total;
+        if (item.videos.total > 0 && item.videos.generated === item.videos.total) videoTeachers.generated += 1;
+        else videoTeachers.not_generated += 1;
+        if (item.videos.processing > 0) videoTeachers.processing += 1;
+        if (item.videos.failed > 0) videoTeachers.failed += 1;
       }
       return {
         id: cat.id,
@@ -68,6 +66,16 @@ router.get("/summary", async (_req: Request, res: Response) => {
         unique_teachers: teachers.length,
         nominations,
         status,
+        videos: {
+          ...videos,
+          not_generated: Math.max(0, videos.total - videos.generated),
+          teachers: videoTeachers,
+        },
+        images_finalized: cat.photo === "with_photo" ? status.GENERATED : teachers.length,
+        images_pending:
+          cat.photo === "with_photo"
+            ? status.NOT_GENERATED + status.GENERATING + status.NEEDS_REVIEW + status.FAILED
+            : 0,
       };
     });
     const kinds = NOMINATION_KINDS.map((kind) => {
@@ -99,18 +107,20 @@ router.get("/", async (req: Request, res: Response) => {
     const kind = isKind(req.query.kind) ? req.query.kind : "student";
     const photo = isPhoto(req.query.photo) ? req.query.photo : "with_photo";
     const statusFilter = isAdminStatus(req.query.status) ? req.query.status : null;
+    const videoStatus = isVideoAdminFilter(req.query.video_status) ? req.query.video_status : null;
     const q = String(req.query.q || "").trim().toLowerCase();
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSizeRaw = String(req.query.pageSize || PAGE_SIZE);
     const idsOnly = req.query.ids_only === "1" || req.query.ids_only === "true";
     const categoryId = categoryIdOf(kind, photo);
 
-    const { buckets, portraitsMap } = await loadCatalog();
+    const { buckets, portraitsMap, videosMap, live, nomsByPhone } = await loadAdminTeacherCatalog();
     let items = [...(buckets.get(categoryId)?.values() || [])].map((teacher) =>
-      teacherListItem(teacher, portraitsMap.get(teacher.phone))
+      teacherListItem(teacher, portraitsMap.get(teacher.phone), videosMap, live, nomsByPhone.get(teacher.phone))
     );
 
     if (statusFilter) items = items.filter((row) => row.portrait_status === statusFilter);
+    if (videoStatus) items = items.filter((row) => matchesVideoAdminFilter(row.videos, videoStatus));
     if (q) {
       items = items.filter(
         (row) => row.name.toLowerCase().includes(q) || row.phone.includes(q)
@@ -173,7 +183,7 @@ router.post("/:phone/regenerate", async (req: Request, res: Response) => {
   try {
     await runGenerate(req, res, true);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to regenerate portrait";
+    const message = err instanceof Error ? err.message : "Failed to regenerate teacher portrait";
     res.status(500).json({ error: message });
   }
 });

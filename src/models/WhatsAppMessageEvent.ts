@@ -101,6 +101,7 @@ whatsAppMessageEventSchema.pre("save", function () {
 });
 
 whatsAppMessageEventSchema.index({ createdAt: -1 });
+whatsAppMessageEventSchema.index({ messageKind: 1, createdAt: -1 });
 whatsAppMessageEventSchema.index({ phone: 1, messageKind: 1, createdAt: -1 });
 whatsAppMessageEventSchema.index({ messageKind: 1, attemptNumber: 1, retryEligible: 1, status: 1, createdAt: 1 });
 whatsAppMessageEventSchema.index({ retryGroupId: 1, attemptNumber: 1 });

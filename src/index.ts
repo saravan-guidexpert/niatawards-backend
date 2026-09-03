@@ -17,6 +17,7 @@ import gupshupWebhookRoutes from "./routes/gupshupWebhook";
 import cronRoutes from "./routes/cron";
 import nominationVideoRoutes from "./routes/nominationVideos";
 import { seedSuperAdmin } from "./lib/seedSuperAdmin";
+import { startVideoGenerationWorker } from "./lib/videoGenerationWorker";
 import { Nomination } from "./models/Nomination";
 import { OtpVerification } from "./models/OtpVerification";
 
@@ -109,6 +110,7 @@ const start = async () => {
     // collection may not exist yet
   }
   await seedSuperAdmin();
+  await startVideoGenerationWorker();
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });

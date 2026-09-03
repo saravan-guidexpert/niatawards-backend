@@ -80,6 +80,8 @@ export const mapPortraitAdminStatus = (
   portrait: {
     portrait_status?: unknown;
     cropped_cloudinary_url?: unknown;
+    source_nomination_id?: unknown;
+    portrait_error?: unknown;
   } | null | undefined,
   categoryPhoto: PhotoState
 ): PortraitAdminStatus => {
@@ -88,9 +90,14 @@ export const mapPortraitAdminStatus = (
   const status = String(portrait.portrait_status || "");
   if (status === "NOT_PROVIDED") return "NO_PHOTO";
   if (status === "PROCESSING") return "GENERATING";
-  if (status === "NEEDS_REVIEW") return "NEEDS_REVIEW";
   if (status === "FAILED") return "FAILED";
   if (isFinalizedPortrait(portrait)) return "GENERATED";
+  if (status === "NEEDS_REVIEW") {
+    if (String(portrait.source_nomination_id || "").trim()) {
+      return String(portrait.portrait_error || "").trim() ? "FAILED" : "NOT_GENERATED";
+    }
+    return "NEEDS_REVIEW";
+  }
   if (status === "PENDING" || !status) return "NOT_GENERATED";
   return "NOT_GENERATED";
 };

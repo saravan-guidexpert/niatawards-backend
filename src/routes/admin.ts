@@ -33,6 +33,7 @@ import {
 import whatsappOpsAdminRoutes from "./whatsappOpsAdmin";
 import videoReviewAdminRoutes from "./videoReviewAdmin";
 import teacherPortraitsAdminRoutes from "./teacherPortraitsAdmin";
+import videoGenerationAdminRoutes from "./videoGenerationAdmin";
 
 const router = Router();
 
@@ -109,6 +110,7 @@ router.use(adminAuth);
 router.use("/whatsapp-ops", requirePermission("whatsapp"), whatsappOpsAdminRoutes);
 router.use("/video-reviews", requirePermission("nominations"), videoReviewAdminRoutes);
 router.use("/teacher-portraits", requirePermission("nominations"), teacherPortraitsAdminRoutes);
+router.use("/video-generation", requirePermission("nominations"), videoGenerationAdminRoutes);
 
 router.get("/me", (req: Request, res: Response) => {
   res.json({ user: req.admin });

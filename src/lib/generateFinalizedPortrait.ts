@@ -134,20 +134,19 @@ export const resolvePortraitSource = (
   const withPhoto = noms.filter((n) => hasSourcePhoto(n.photo_url));
   if (!withPhoto.length) return { kind: "no_photo" };
 
+  const byId = (id: string) => withPhoto.find((row) => String(row._id) === id);
+  const byUrl = (url: string) => withPhoto.find((row) => String(row.photo_url || "").trim() === url);
+
   if (explicitSourceId) {
-    const n = withPhoto.find((row) => String(row._id) === explicitSourceId);
+    const n = byId(explicitSourceId);
     if (!n) return { kind: "invalid_source" };
     return { kind: "ok", nomination: n };
   }
 
   const storedId = text(existing?.source_nomination_id);
   const storedUrl = text(existing?.source_photo_url);
-  if (storedId && storedUrl) {
-    const n = withPhoto.find((row) => String(row._id) === storedId);
-    if (n && String(n.photo_url || "").trim() === storedUrl) {
-      return { kind: "ok", nomination: n };
-    }
-  }
+  const locked = (storedId && byId(storedId)) || (storedUrl && byUrl(storedUrl));
+  if (locked) return { kind: "ok", nomination: locked };
 
   const representative = groupName(withPhoto);
   const nameConflict = withPhoto.some((n) => !namesCompatible(teacherDisplayName(n), representative));
@@ -163,6 +162,16 @@ export const resolvePortraitSource = (
   }
   if (uniqueUrls.size === 1) return { kind: "ok", nomination: [...uniqueUrls.values()][0] };
   return { kind: "no_photo" };
+};
+
+const STALE_PROCESSING_MS = 8 * 60 * 1000;
+
+const isActivelyGenerating = (existing: PortraitRow | null | undefined) => {
+  if (String(existing?.portrait_status || "") !== "PROCESSING") return false;
+  const raw = (existing as { updated_at?: unknown })?.updated_at;
+  const t = new Date(String(raw || "")).getTime();
+  if (!Number.isFinite(t)) return true;
+  return Date.now() - t < STALE_PROCESSING_MS;
 };
 
 const downloadPhoto = async (photoUrl: string, destBase: string) => {
@@ -291,7 +300,7 @@ export const generateFinalizedPortrait = async (opts: {
   const name = groupName(forPhone);
   const existing = (await TeacherPortrait.findOne({ teacher_phone: phone }).lean()) as PortraitRow | null;
 
-  if (String(existing?.portrait_status || "") === "PROCESSING") {
+  if (isActivelyGenerating(existing) && !opts.regenerate && !text(opts.source_nomination_id)) {
     return { ok: true, skipped: true, reason: "generating", phone };
   }
 
@@ -328,6 +337,8 @@ export const generateFinalizedPortrait = async (opts: {
     {
       $set: {
         teacher_name: name || teacherDisplayName(source.nomination) || null,
+        source_nomination_id: String(source.nomination._id),
+        source_photo_url: String(source.nomination.photo_url || "").trim() || null,
         portrait_status: "PROCESSING",
         portrait_error: null,
       },

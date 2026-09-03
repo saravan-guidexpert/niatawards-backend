@@ -40,6 +40,52 @@ export type CatalogPortrait = {
   crop_version?: unknown;
 };
 
+export type CatalogVideo = {
+  nomination_id: string;
+  generation_status?: unknown;
+  video_url?: unknown;
+  category_icon_id?: unknown;
+  category_icon_filename?: unknown;
+};
+
+export type VideoLiveStatus = "QUEUED" | "PROCESSING";
+
+export type VideoCounts = {
+  generated: number;
+  pending: number;
+  processing: number;
+  failed: number;
+  total: number;
+};
+
+export const VIDEO_ADMIN_FILTERS = ["generated", "not_generated", "processing", "failed"] as const;
+export type VideoAdminFilter = (typeof VIDEO_ADMIN_FILTERS)[number];
+
+export type VideoTeacherCounts = {
+  generated: number;
+  not_generated: number;
+  processing: number;
+  failed: number;
+};
+
+export const emptyVideoTeacherCounts = (): VideoTeacherCounts => ({
+  generated: 0,
+  not_generated: 0,
+  processing: 0,
+  failed: 0,
+});
+
+export const isVideoAdminFilter = (value: unknown): value is VideoAdminFilter =>
+  VIDEO_ADMIN_FILTERS.includes(String(value) as VideoAdminFilter);
+
+export const matchesVideoAdminFilter = (videos: VideoCounts, filter: VideoAdminFilter) => {
+  if (filter === "generated") return videos.total > 0 && videos.generated === videos.total;
+  if (filter === "not_generated") return videos.generated < videos.total;
+  if (filter === "processing") return videos.processing > 0;
+  if (filter === "failed") return videos.failed > 0;
+  return true;
+};
+
 export type CategoryTeacher = {
   phone: string;
   name: string;
@@ -55,6 +101,50 @@ export type CategoryTeacher = {
 const timeOf = (value: unknown) => {
   const ms = new Date(String(value ?? "")).getTime();
   return Number.isNaN(ms) ? 0 : ms;
+};
+
+const hasPlayableUrl = (url: unknown) => /^https?:\/\//i.test(String(url || "").trim());
+
+export const emptyVideoCounts = (): VideoCounts => ({
+  generated: 0,
+  pending: 0,
+  processing: 0,
+  failed: 0,
+  total: 0,
+});
+
+export const videoCountsFor = (
+  nominationIds: string[],
+  videos: Map<string, CatalogVideo>,
+  live: Map<string, VideoLiveStatus>
+): VideoCounts => {
+  const counts = emptyVideoCounts();
+  counts.total = nominationIds.length;
+  for (const id of nominationIds) {
+    const liveStatus = live.get(id);
+    if (liveStatus === "PROCESSING" || liveStatus === "QUEUED") {
+      counts.processing += 1;
+      continue;
+    }
+    const video = videos.get(id);
+    if (String(video?.generation_status || "") === "generated" && hasPlayableUrl(video?.video_url)) {
+      counts.generated += 1;
+    } else if (String(video?.generation_status || "") === "failed") {
+      counts.failed += 1;
+    } else {
+      counts.pending += 1;
+    }
+  }
+  return counts;
+};
+
+export const videoByNomination = (videos: CatalogVideo[]) => {
+  const map = new Map<string, CatalogVideo>();
+  for (const video of videos) {
+    const id = String(video.nomination_id || "");
+    if (id) map.set(id, video);
+  }
+  return map;
 };
 
 export const buildCategoryTeachers = (nominations: CatalogNomination[]) => {
@@ -105,6 +195,35 @@ export const buildCategoryTeachers = (nominations: CatalogNomination[]) => {
   return buckets;
 };
 
+export const nominationsByPhone = (nominations: CatalogNomination[]) => {
+  const map = new Map<string, CatalogNomination[]>();
+  for (const n of nominations) {
+    if (!isSubmittedNomination(n)) continue;
+    const phone = usableTeacherPhone(n.phone);
+    if (!phone) continue;
+    const list = map.get(phone) || [];
+    list.push(n);
+    map.set(phone, list);
+  }
+  return map;
+};
+
+const photoCandidates = (noms: CatalogNomination[]) => {
+  const seen = new Map<string, { id: string; teacher_name: string; photo_url: string; created_at: string | null }>();
+  for (const n of noms) {
+    if (!hasSourcePhoto(n.photo_url)) continue;
+    const url = String(n.photo_url || "").trim();
+    if (!url || seen.has(url)) continue;
+    seen.set(url, {
+      id: String(n._id),
+      teacher_name: teacherDisplayName(n),
+      photo_url: url,
+      created_at: n.created_at ? new Date(n.created_at).toISOString() : null,
+    });
+  }
+  return [...seen.values()];
+};
+
 export const emptyStatusCounts = (): Record<PortraitAdminStatus, number> => ({
   NOT_GENERATED: 0,
   GENERATING: 0,
@@ -123,28 +242,28 @@ export const portraitByPhone = (portraits: CatalogPortrait[]) => {
   return map;
 };
 
-export const teacherListItem = (teacher: CategoryTeacher, portrait: CatalogPortrait | undefined) => {
+export const teacherListItem = (
+  teacher: CategoryTeacher,
+  portrait: CatalogPortrait | undefined,
+  videos?: Map<string, CatalogVideo>,
+  live?: Map<string, VideoLiveStatus>,
+  allNomsForPhone?: CatalogNomination[]
+) => {
   const adminStatus = mapPortraitAdminStatus(portrait, teacher.photo);
-  const seen = new Map<string, { id: string; teacher_name: string; photo_url: string; created_at: string | null }>();
-  if (adminStatus === "NEEDS_REVIEW") {
-    for (const n of teacher.nominations) {
-      if (!hasSourcePhoto(n.photo_url)) continue;
-      const url = String(n.photo_url || "").trim();
-      if (!url || seen.has(url)) continue;
-      seen.set(url, {
-        id: String(n._id),
-        teacher_name: teacherDisplayName(n),
-        photo_url: url,
-        created_at: n.created_at ? new Date(n.created_at).toISOString() : null,
-      });
-    }
-  }
+  const sourceLocked = Boolean(String(portrait?.source_nomination_id || "").trim());
+  const candidates =
+    adminStatus === "NEEDS_REVIEW" && !sourceLocked
+      ? photoCandidates(allNomsForPhone?.length ? allNomsForPhone : teacher.nominations)
+      : [];
+  const videoCounts = videoCountsFor(teacher.nomination_ids, videos || new Map(), live || new Map());
+  const imageReady = teacher.photo === "without_photo" || adminStatus === "GENERATED";
   return {
     phone: teacher.phone,
     name: teacher.name,
     kind: teacher.kind,
     photo: teacher.photo,
     nomination_count: teacher.nomination_count,
+    nomination_ids: teacher.nomination_ids,
     portrait_status: adminStatus,
     cropped_cloudinary_url: adminStatus === "GENERATED" ? String(portrait?.cropped_cloudinary_url || "").trim() || null : null,
     source_nomination_id: portrait?.source_nomination_id ? String(portrait.source_nomination_id) : null,
@@ -153,6 +272,14 @@ export const teacherListItem = (teacher: CategoryTeacher, portrait: CatalogPortr
     generated_at: portrait?.generated_at ? new Date(portrait.generated_at).toISOString() : null,
     finalized_at: portrait?.finalized_at ? new Date(portrait.finalized_at).toISOString() : null,
     crop_version: portrait?.crop_version ? String(portrait.crop_version) : null,
-    candidates: [...seen.values()],
+    candidates,
+    videos: videoCounts,
+    preview_nomination_id: teacher.nomination_ids[0] || null,
+    can_generate_image:
+      teacher.photo === "with_photo" &&
+      adminStatus !== "GENERATED" &&
+      adminStatus !== "GENERATING" &&
+      (Boolean(teacher.source_photo_url) || sourceLocked || candidates.length > 0),
+    can_generate_videos: imageReady && videoCounts.total > 0,
   };
 };

@@ -21,6 +21,31 @@ export const portraitPngPath = (nominationId: string) =>
 export const portraitPreviewPath = (nominationId: string) =>
   path.join(teacherPortraitDir(), `${nominationId}-preview.png`);
 
+export const portraitPreviewMetaPath = (nominationId: string) =>
+  path.join(teacherPortraitDir(), `${nominationId}-preview-meta.json`);
+
+export type PreviewIconMeta = {
+  category_icon_id: string;
+  category_icon_filename: string;
+};
+
+export const readPreviewIconMeta = (nominationId: string): PreviewIconMeta | null => {
+  const file = portraitPreviewMetaPath(nominationId);
+  if (!fs.existsSync(file)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as PreviewIconMeta;
+    if (!parsed?.category_icon_filename) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+export const writePreviewIconMeta = (nominationId: string, meta: PreviewIconMeta) => {
+  fs.mkdirSync(teacherPortraitDir(), { recursive: true });
+  fs.writeFileSync(portraitPreviewMetaPath(nominationId), JSON.stringify(meta, null, 2));
+};
+
 export const portraitReportPath = (nominationId: string) =>
   path.join(teacherPortraitDir(), `${nominationId}-report.json`);
 

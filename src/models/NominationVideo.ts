@@ -2,6 +2,9 @@ import { Schema, model } from "mongoose";
 import { randomUUID } from "crypto";
 
 export const VIDEO_GENERATION_STATUSES = ["pending", "generated", "failed"] as const;
+export const PRODUCTION_VIDEO_BATCH_ID = "teachers-day-2026-final";
+export const PRODUCTION_AUDIO_FILENAME = "nominated-by-students.mp3";
+
 export const VIDEO_REVIEW_STATUSES = [
   "none",
   "ready_for_review",
@@ -40,6 +43,7 @@ const nominationVideoSchema = new Schema(
       default: "none",
     },
     video_url: { type: String, default: null },
+    video_render_id: { type: String, default: null },
     generated_at: { type: Date, default: null },
     approved_at: { type: Date, default: null },
     rejected_at: { type: Date, default: null },
@@ -48,6 +52,15 @@ const nominationVideoSchema = new Schema(
     // True after admin approval. Does not mean sent. No message queue.
     ready_for_message: { type: Boolean, default: false },
     generation_error: { type: String, default: null },
+    // Generated template portrait (Cloudinary). Never overwrite photo_url on Nomination.
+    portrait_cloudinary_url: { type: String, default: null },
+    photo_used: { type: Boolean, default: false },
+    category_icon_id: { type: String, default: null },
+    category_icon_filename: { type: String, default: null },
+    video_category: { type: String, default: null, enum: ["with_photo", "without_photo", null] },
+    audio_filename: { type: String, default: null },
+    production_batch_id: { type: String, default: null },
+    generation_job_id: { type: String, default: null },
   },
   {
     toJSON: { transform: jsonTransform },
