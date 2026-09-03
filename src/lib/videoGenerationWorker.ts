@@ -14,6 +14,7 @@ import {
   VideoPipelineError,
 } from "./generateNominationVideo";
 import { isFinalizedPortrait } from "./nominationKind";
+import { assertVideoRenderReady } from "./renderTeacherVideo";
 import type { CategoryTeacher, CatalogPortrait, CatalogVideo } from "./teacherPortraitCatalog";
 
 const CONCURRENCY = Math.max(1, Math.min(4, Number(process.env.VIDEO_WORKER_CONCURRENCY || 2) || 2));
@@ -100,30 +101,42 @@ const recountJob = async (jobId: string) => {
     VideoGenerationJobItem.countDocuments({ job_id: jobId, status: "FAILED" }),
     VideoGenerationJobItem.countDocuments({ job_id: jobId, status: "CANCELLED" }),
   ]);
-  const job = await VideoGenerationJob.findById(jobId);
+  const job = await VideoGenerationJob.findById(jobId).lean();
   if (!job) return null;
-  job.queued = queued;
-  job.processing = processing;
-  job.completed = completed;
-  job.failed = failed;
-  job.cancelled = cancelled;
+  const update: Record<string, unknown> = { queued, processing, completed, failed, cancelled };
   const remaining = queued + processing;
-  if (job.cancel_requested && remaining === 0) {
-    job.status = "cancelled";
-    job.completed_at = job.completed_at || new Date();
-    job.current = null;
-  } else if (!job.cancel_requested && remaining === 0 && job.total > 0) {
-    job.status = "completed";
-    job.completed_at = job.completed_at || new Date();
-    job.current = null;
+  if (remaining === 0 && (job.cancel_requested || job.total > 0)) {
+    update.status = job.cancel_requested ? "cancelled" : "completed";
+    update.completed_at = job.completed_at || new Date();
+    update.current = null;
   }
-  await job.save();
-  return job;
+  // Atomic so two workers finishing at once cannot lose an optimistic-concurrency race.
+  return VideoGenerationJob.findByIdAndUpdate(jobId, { $set: update }, { new: true });
 };
 
-const pushRecent = (job: { recent?: VideoJobRecentItem[] }, row: VideoJobRecentItem) => {
-  const next = [row, ...(Array.isArray(job.recent) ? job.recent : [])].slice(0, RECENT_LIMIT);
-  job.recent = next;
+/**
+ * Records one finished item on the parent job. Two workers touch the same job
+ * document, so this is an atomic pipeline update: a load-modify-save here would
+ * lose an optimistic-concurrency race and fail a video that already rendered.
+ */
+const recordFinishedItem = async (jobId: string, row: VideoJobRecentItem, durationMs: number | null) => {
+  const stages: Record<string, unknown>[] = [];
+  if (durationMs !== null) {
+    stages.push({
+      $set: {
+        recent_durations_ms: {
+          $slice: [{ $concatArrays: [{ $ifNull: ["$recent_durations_ms", []] }, [durationMs]] }, -ROLLING],
+        },
+      },
+    });
+    stages.push({ $set: { avg_ms: { $round: [{ $avg: "$recent_durations_ms" }, 0] } } });
+  }
+  stages.push({
+    $set: {
+      recent: { $slice: [{ $concatArrays: [[row], { $ifNull: ["$recent", []] }] }, RECENT_LIMIT] },
+    },
+  });
+  await VideoGenerationJob.findByIdAndUpdate(jobId, stages);
 };
 
 export const createVideoGenerationJob = async (opts: {
@@ -214,6 +227,7 @@ export const retryFailedVideoJob = async (jobId: string, createdBy?: string | nu
  * still PROCESSING past this window belongs to a worker that died.
  */
 const STALE_ITEM_MS = 10 * 60 * 1000;
+const SWEEP_INTERVAL_MS = 2 * 60 * 1000;
 
 const requeueStaleItems = async () => {
   const result = await VideoGenerationJobItem.updateMany(
@@ -274,21 +288,19 @@ const processItem = async (item: InstanceType<typeof VideoGenerationJobItem>) =>
     item.failure_stage = null;
     await item.save();
 
-    const fresh = await VideoGenerationJob.findById(item.job_id);
-    if (fresh) {
-      const rolling = [...(fresh.recent_durations_ms || []), duration].slice(-ROLLING);
-      fresh.recent_durations_ms = rolling;
-      fresh.avg_ms = Math.round(rolling.reduce((sum, n) => sum + n, 0) / rolling.length);
-      pushRecent(fresh, {
+    // Progress stats must never turn a finished video into a failure.
+    await recordFinishedItem(
+      item.job_id,
+      {
         nomination_id: item.nomination_id,
         teacher_name: item.teacher_name,
         teacher_phone: item.teacher_phone,
         status: "COMPLETED",
         error: null,
         failure_stage: null,
-      });
-      await fresh.save();
-    }
+      },
+      duration
+    ).catch((err) => console.error("[video-worker] progress update failed", err));
   } catch (err) {
     const message = messageOf(err);
     const stage = stageOf(err);
@@ -299,18 +311,18 @@ const processItem = async (item: InstanceType<typeof VideoGenerationJobItem>) =>
     item.failure_stage = stage;
     await item.save();
     await markNominationVideoFailed(item.nomination_id, `${stage}: ${message}`, item.job_id);
-    const fresh = await VideoGenerationJob.findById(item.job_id);
-    if (fresh) {
-      pushRecent(fresh, {
+    await recordFinishedItem(
+      item.job_id,
+      {
         nomination_id: item.nomination_id,
         teacher_name: item.teacher_name,
         teacher_phone: item.teacher_phone,
         status: "FAILED",
         error: message,
         failure_stage: stage,
-      });
-      await fresh.save();
-    }
+      },
+      null
+    ).catch((err) => console.error("[video-worker] progress update failed", err));
   }
 
   await recountJob(item.job_id);
@@ -324,8 +336,32 @@ const workerLoop = async () => {
   }
 };
 
+/**
+ * Renders need the bg-remove tree, Python and FFmpeg. The API also runs on
+ * serverless, where none of that exists, so that instance must leave queued
+ * items alone instead of claiming and failing every one of them.
+ */
+const RENDER_CHECK_TTL_MS = 60_000;
+let renderCheckedAt = 0;
+let renderCapable = false;
+
+export const canRenderVideos = () => {
+  if (Date.now() - renderCheckedAt < RENDER_CHECK_TTL_MS) return renderCapable;
+  renderCheckedAt = Date.now();
+  try {
+    assertVideoRenderReady();
+    renderCapable = true;
+  } catch (err) {
+    if (renderCapable !== false) {
+      console.warn(`[video-worker] not rendering here: ${err instanceof Error ? err.message : err}`);
+    }
+    renderCapable = false;
+  }
+  return renderCapable;
+};
+
 export const kickVideoWorker = () => {
-  if (pumping) return;
+  if (pumping || !canRenderVideos()) return;
   pumping = true;
   void (async () => {
     let crashed = false;
@@ -351,13 +387,20 @@ export const kickVideoWorker = () => {
 };
 
 export const startVideoGenerationWorker = async () => {
-  await VideoGenerationJobItem.updateMany(
-    { status: "PROCESSING" },
-    { $set: { status: "QUEUED", started_at: null, error: "Recovered after restart" } }
-  );
+  if (!canRenderVideos()) {
+    console.log("[video-worker] renderer unavailable on this instance; queued videos are left for a render host");
+    return;
+  }
+  await requeueStaleItems();
   const running = await VideoGenerationJob.find({ status: "running" }).select("_id").lean();
   for (const job of running) await recountJob(job._id);
   kickVideoWorker();
+  // Picks up items orphaned by a crash, and jobs queued by another instance.
+  setInterval(() => {
+    void requeueStaleItems()
+      .then(() => kickVideoWorker())
+      .catch(() => undefined);
+  }, SWEEP_INTERVAL_MS).unref();
 };
 
 export const etaSecondsFor = (job: {

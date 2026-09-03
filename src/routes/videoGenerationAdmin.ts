@@ -52,28 +52,22 @@ const phonesFromBody = (body: Record<string, unknown>) => {
   return [...new Set(raw.map((value) => usableTeacherPhone(value)).filter(Boolean))];
 };
 
-const renderNotReady = (res: Response) => {
+const renderError = () => {
   try {
     assertVideoRenderReady();
-    return false;
+    return "";
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Video renderer is not ready";
-    res.status(503).json({ error: `Video renderer is not ready: ${message}` });
-    return true;
+    return err instanceof Error ? err.message : "Video renderer is not available";
   }
 };
 
 router.get("/readiness", (_req: Request, res: Response) => {
-  let videoError = "";
-  try {
-    assertVideoRenderReady();
-  } catch (err) {
-    videoError = err instanceof Error ? err.message : "Video renderer is not ready";
-  }
+  const videoError = renderError();
   const portraitError = portraitConfigError();
   res.json({
     video_ready: !videoError,
     video_error: videoError || null,
+    renders_here: !videoError,
     portrait_ready: !portraitError,
     portrait_error: portraitError || null,
   });
@@ -176,7 +170,6 @@ router.post("/jobs", async (req: Request, res: Response) => {
       res.status(400).json({ error: "Select one or more teachers" });
       return;
     }
-    if (renderNotReady(res)) return;
     const { buckets, portraitsMap, videosMap } = await loadAdminTeacherCatalog();
     const categoryId = categoryIdOf(kind, photo);
     const teachers = phones
@@ -237,7 +230,6 @@ router.post("/jobs/:id/cancel", async (req: Request, res: Response) => {
 
 router.post("/jobs/:id/retry-failed", async (req: Request, res: Response) => {
   try {
-    if (renderNotReady(res)) return;
     const createdBy = req.admin?.username || req.admin?.id || null;
     const job = await retryFailedVideoJob(String(req.params.id || ""), createdBy);
     res.status(202).json({ job: jobPublicView(job.toObject()) });
