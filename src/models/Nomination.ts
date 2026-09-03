@@ -72,6 +72,7 @@ const nominationSchema = new Schema(
 
 nominationSchema.index({ status: 1 });
 nominationSchema.index({ award_category: 1 });
+nominationSchema.index({ created_at: -1 });
 nominationSchema.index({ nominator_phone: 1, type: 1, status: 1 });
 nominationSchema.index({ draft_token: 1 }, { sparse: true });
 

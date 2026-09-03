@@ -61,22 +61,37 @@ export type TeacherWhatsAppStatus = {
 };
 
 /** Latest student-nominate attempt per 10-digit phone, for the admin nominations list. */
-export const latestTeacherSubmitStatusByPhones = async (phones: string[]) => {
-  const unique = [...new Set(phones.map((p) => toPhone10(p)).filter((p) => /^\d{10}$/.test(p)))];
+export const latestTeacherSubmitStatusByPhones = async (phones?: string[]) => {
+  const wanted = phones
+    ? new Set(phones.map((p) => toPhone10(p)).filter((p) => /^\d{10}$/.test(p)))
+    : null;
   const out = new Map<string, TeacherWhatsAppStatus>();
-  if (!unique.length) return out;
+  if (wanted && wanted.size === 0) return out;
 
-  const rows = await WhatsAppMessageEvent.find({
-    messageKind: { $in: [STUDENT_NOMINATE_WHATSAPP_KIND, TEACHER_SUBMIT_WHATSAPP_KIND] },
-    phone: { $in: unique },
-  })
-    .select({ phone: 1, status: 1, attemptNumber: 1, errorMessage: 1, createdAt: 1 })
-    .sort({ createdAt: -1, attemptNumber: -1 })
-    .lean();
+  const kinds = [STUDENT_NOMINATE_WHATSAPP_KIND, TEACHER_SUBMIT_WHATSAPP_KIND];
+  // Group latest-per-phone for these kinds instead of `$in` over thousands of
+  // numbers, which cannot use the phone index and timed the admin list out.
+  const rows = await WhatsAppMessageEvent.aggregate<{
+    _id: string;
+    status: string;
+    attemptNumber: number;
+    errorMessage: string | null;
+  }>([
+    { $match: { messageKind: { $in: kinds } } },
+    { $sort: { createdAt: -1, attemptNumber: -1 } },
+    {
+      $group: {
+        _id: "$phone",
+        status: { $first: "$status" },
+        attemptNumber: { $first: "$attemptNumber" },
+        errorMessage: { $first: "$errorMessage" },
+      },
+    },
+  ]).option({ allowDiskUse: true, maxTimeMS: 4000 });
 
   for (const row of rows) {
-    const phone = String(row.phone || "");
-    if (!phone || out.has(phone)) continue;
+    const phone = String(row._id || "");
+    if (!phone || (wanted && !wanted.has(phone))) continue;
     out.set(phone, {
       status: String(row.status || "queued"),
       attemptNumber: Number(row.attemptNumber || 1),

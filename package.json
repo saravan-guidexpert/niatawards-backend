@@ -5,21 +5,25 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "generate:teacher-videos": "tsx scripts/generateAllStudentVideos.ts"
   },
   "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "cloudinary": "^2.10.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "mongoose": "^8.9.5",
-    "multer": "^2.2.0"
+    "multer": "^2.2.0",
+    "openai": "4.104.0",
+    "pngjs": "^7.0.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/multer": "^2.2.0",
     "@types/node": "^22.16.5",
+    "@types/pngjs": "^6.0.5",
     "tsx": "^4.19.2",
     "typescript": "^5.8.3"
   }

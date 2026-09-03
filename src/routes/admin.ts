@@ -32,6 +32,7 @@ import {
 } from "../lib/digitalCampaign";
 import whatsappOpsAdminRoutes from "./whatsappOpsAdmin";
 import videoReviewAdminRoutes from "./videoReviewAdmin";
+import teacherPortraitsAdminRoutes from "./teacherPortraitsAdmin";
 
 const router = Router();
 
@@ -107,6 +108,7 @@ router.use(adminAuth);
 
 router.use("/whatsapp-ops", requirePermission("whatsapp"), whatsappOpsAdminRoutes);
 router.use("/video-reviews", requirePermission("nominations"), videoReviewAdminRoutes);
+router.use("/teacher-portraits", requirePermission("nominations"), teacherPortraitsAdminRoutes);
 
 router.get("/me", (req: Request, res: Response) => {
   res.json({ user: req.admin });
@@ -379,14 +381,22 @@ router.get(
   async (_req: Request, res: Response) => {
   try {
     // Drafts included so the panel shows leads that stopped part-way through the form.
-    const nominations = await Nomination.find().sort({ created_at: -1 });
-    const jsons = nominations.map((n) => n.toJSON() as Record<string, unknown>);
-    const studentPhones = jsons
-      .filter((n) => n.type === "student" && n.status !== "draft")
-      .map((n) => String(n.nominator_phone || ""));
-    const waByPhone = await latestTeacherSubmitStatusByPhones(studentPhones);
+    const [nominations, waByPhone] = await Promise.all([
+      Nomination.find()
+        .select("-draft_token -__v")
+        .sort({ created_at: -1 })
+        .lean(),
+      latestTeacherSubmitStatusByPhones().catch((err) => {
+        console.error("[admin nominations] whatsapp status lookup skipped", err);
+        return new Map();
+      }),
+    ]);
+    const jsons = nominations.map((n) => {
+      const { _id, ...rest } = n as { _id: string } & Record<string, unknown>;
+      return { ...rest, id: _id };
+    });
     res.json(
-      jsons.map((n) => {
+      jsons.map((n: Record<string, unknown> & { id: string }) => {
         if (n.type !== "student" || n.status === "draft") {
           return { ...n, whatsapp_status: null, whatsapp_attempt: null, whatsapp_error: null };
         }
