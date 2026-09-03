@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { VideoGenerationJob, VideoGenerationJobItem } from "../models/VideoGenerationJob";
-import { PRODUCTION_AUDIO_FILENAME } from "../models/NominationVideo";
+import { NominationVideo, PRODUCTION_AUDIO_FILENAME } from "../models/NominationVideo";
 import {
   NOMINATION_KINDS,
   PHOTO_STATES,
@@ -22,6 +22,7 @@ import {
 import { rasterizeCategoryIcon, resolveCategoryIcon, categoryIconLabel } from "../lib/categoryIcons";
 import {
   composeNominationPreview,
+  hasPlayableVideoUrl,
 } from "../lib/generateNominationVideo";
 import { portraitConfigError } from "../lib/generateFinalizedPortrait";
 import {
@@ -64,9 +65,12 @@ const renderError = () => {
 router.get("/readiness", (_req: Request, res: Response) => {
   const videoError = renderError();
   const portraitError = portraitConfigError();
+  // Missing renderer assets must not block the admin UI. This host can still
+  // queue jobs; a machine with bg-remove encodes them. Do not return the
+  // internal search-path dump as video_error — older UIs treat that as a hard stop.
   res.json({
-    video_ready: !videoError,
-    video_error: videoError || null,
+    video_ready: true,
+    video_error: null,
     renders_here: !videoError,
     portrait_ready: !portraitError,
     portrait_error: portraitError || null,
@@ -239,6 +243,51 @@ router.post("/jobs/:id/retry-failed", async (req: Request, res: Response) => {
   }
 });
 
+router.get("/videos", async (req: Request, res: Response) => {
+  try {
+    const phone = usableTeacherPhone(req.query.phone);
+    const kind = isKind(req.query.kind) ? req.query.kind : "student";
+    const photo = isPhoto(req.query.photo) ? req.query.photo : "with_photo";
+    if (!phone) {
+      res.status(400).json({ error: "A valid teacher phone is required" });
+      return;
+    }
+    const { buckets } = await loadAdminTeacherCatalog();
+    const teacher = buckets.get(categoryIdOf(kind, photo))?.get(phone);
+    if (!teacher) {
+      res.status(404).json({ error: "Teacher not found in this category" });
+      return;
+    }
+    const docs = await NominationVideo.find({
+      nomination_id: { $in: teacher.nomination_ids },
+      generation_status: "generated",
+    })
+      .select("nomination_id video_url video_render_id generated_at")
+      .lean();
+    const byId = new Map(docs.map((doc) => [String(doc.nomination_id), doc]));
+    const videos = teacher.nomination_ids.flatMap((nominationId) => {
+      const doc = byId.get(nominationId);
+      const videoUrl = String(doc?.video_url || "").trim();
+      if (!doc || !hasPlayableVideoUrl(videoUrl)) return [];
+      const nom = teacher.nominations.find((row) => String(row._id) === nominationId);
+      const renderId = String(doc.video_render_id || "").trim();
+      return [
+        {
+          nomination_id: nominationId,
+          video_url: videoUrl,
+          video_render_id: renderId || null,
+          generated_at: doc.generated_at ? new Date(doc.generated_at).toISOString() : null,
+          label: nom ? teacherDisplayName(nom) || teacher.name : teacher.name,
+        },
+      ];
+    });
+    res.json({ phone, name: teacher.name, videos });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load generated videos";
+    res.status(500).json({ error: message });
+  }
+});
+
 router.get("/preview", async (req: Request, res: Response) => {
   try {
     const phone = usableTeacherPhone(req.query.phone);
@@ -297,6 +346,7 @@ router.get("/preview", async (req: Request, res: Response) => {
       preparedPortraitPath: preparedPath || null,
       categoryIconPath: iconPng,
       outputPath: dest,
+      variant: teacher.kind === "teacher" ? "teacher-nominated-teacher" : "student-nominated",
     });
     res.json({
       phone,
