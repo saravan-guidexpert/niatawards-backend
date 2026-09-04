@@ -1,133 +1,25 @@
 import { randomUUID } from "crypto";
 import { Router, Request, Response } from "express";
-import { notifyStudentOnNominate } from "../lib/teacherSubmitWhatsApp";
+import { AfterSessionNomination } from "../models/AfterSessionNomination";
 import { Nomination } from "../models/Nomination";
+import {
+  applyDraftFields,
+  assertTeacherPhoneNotNominator,
+  cleanPhone,
+  draftPayload,
+  requireCompleteFields,
+  sanitizeEmail,
+  sanitizePhotoUrl,
+  sanitizeUtm,
+  TEACHER_PHONE_SAME_AS_STUDENT_MSG,
+  toClientJson,
+  utmFromBody,
+} from "../lib/afterSessionNomination";
 
 const router = Router();
 
 const VALID_TYPES = ["student", "teacher"] as const;
 const CLIENT_FORM_STEPS = ["otp_sent", "details"] as const;
-
-const DRAFT_FIELDS = [
-  "student_name",
-  "student_class",
-  "class_group",
-  "school_name",
-  "phone",
-  "teacher_name",
-  "award_category",
-  "special_thing",
-  "subject",
-  "impact_story",
-  "board",
-  "teacher_social",
-  "full_name",
-  "experience",
-] as const;
-
-const cleanPhone = (phone: unknown) => String(phone ?? "").replace(/\D/g, "").slice(-10);
-const TEACHER_PHONE_SAME_AS_STUDENT_MSG = "Please enter your nominating teacher's number";
-
-const assertTeacherPhoneNotNominator = (type: string, teacherPhone: string, nominatorPhone: string) => {
-  if (type !== "student") return;
-  if (teacherPhone.length === 10 && nominatorPhone.length === 10 && teacherPhone === nominatorPhone) {
-    throw new Error(TEACHER_PHONE_SAME_AS_STUDENT_MSG);
-  }
-};
-
-const sanitizePhotoUrl = (value: unknown): string | null => {
-  if (value == null || value === "") return null;
-  if (typeof value !== "string") {
-    throw new Error("photo_url must be a string");
-  }
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    throw new Error("photo_url is not a valid URL");
-  }
-  const host = parsed.hostname.toLowerCase();
-  const isCloudinary =
-    parsed.protocol === "https:" &&
-    (host === "res.cloudinary.com" || host.endsWith(".cloudinary.com"));
-  if (!isCloudinary) {
-    throw new Error("photo_url must be a Cloudinary URL");
-  }
-  return trimmed;
-};
-
-const sanitizeUtm = (value: unknown): string | null => {
-  if (value == null || value === "") return null;
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim().slice(0, 256);
-  return trimmed || null;
-};
-
-const utmFromBody = (body: Record<string, unknown>) => ({
-  utm_source: sanitizeUtm(body.utm_source),
-  utm_medium: sanitizeUtm(body.utm_medium),
-  utm_campaign: sanitizeUtm(body.utm_campaign),
-  utm_term: sanitizeUtm(body.utm_term),
-  utm_content: sanitizeUtm(body.utm_content),
-});
-
-const draftPayload = (doc: { toJSON: () => Record<string, unknown>; draft_token?: string | null }) => ({
-  ...doc.toJSON(),
-  draft_token: doc.draft_token,
-});
-
-const applyDraftFields = (draft: InstanceType<typeof Nomination>, body: Record<string, unknown>) => {
-  for (const field of DRAFT_FIELDS) {
-    if (body[field] === undefined) continue;
-    const value = body[field];
-    if (field === "phone") {
-      const cleaned = cleanPhone(value);
-      if (cleaned.length === 10) {
-        assertTeacherPhoneNotNominator(draft.type, cleaned, cleanPhone(draft.nominator_phone));
-        draft.phone = cleaned;
-      }
-      continue;
-    }
-    if (value == null || value === "") {
-      (draft as unknown as Record<string, unknown>)[field] = null;
-      continue;
-    }
-    (draft as unknown as Record<string, unknown>)[field] = String(value).trim();
-  }
-
-  if (body.photo_url !== undefined) {
-    draft.photo_url = sanitizePhotoUrl(body.photo_url);
-  }
-
-  const utm = utmFromBody(body);
-  for (const [key, value] of Object.entries(utm)) {
-    if (body[key] !== undefined) {
-      (draft as unknown as Record<string, unknown>)[key] = value;
-    }
-  }
-};
-
-const requireCompleteFields = (draft: InstanceType<typeof Nomination>) => {
-  if (draft.type === "student") {
-    if (!draft.student_name?.trim()) throw new Error("Please enter your name");
-    if (!draft.student_class?.trim()) throw new Error("Please select your current education");
-    if (!draft.school_name?.trim()) throw new Error("Please enter school / college name");
-    if (!draft.teacher_name?.trim()) throw new Error("Please enter the teacher's full name");
-    if (cleanPhone(draft.phone).length !== 10) throw new Error("Please enter a valid teacher phone number");
-    assertTeacherPhoneNotNominator(draft.type, cleanPhone(draft.phone), cleanPhone(draft.nominator_phone));
-    if (!draft.special_thing?.trim()) throw new Error("Please fill in what's special about this teacher");
-    return;
-  }
-  if (!draft.full_name?.trim()) throw new Error("Please enter your name");
-  if (!draft.school_name?.trim()) throw new Error("Please enter school / college name");
-  if (cleanPhone(draft.phone).length !== 10) throw new Error("Please enter a valid phone number");
-  if (!draft.subject?.trim()) throw new Error("Please enter your subject");
-  if (!draft.experience?.trim()) throw new Error("Please enter years of experience");
-  if (!draft.student_class?.trim()) throw new Error("Please select which class you teach");
-  if (!draft.impact_story?.trim()) throw new Error("Please share your impact story");
-};
 
 router.get("/", async (req: Request, res: Response) => {
   try {
@@ -137,6 +29,7 @@ router.get("/", async (req: Request, res: Response) => {
       .map((s) => s.trim())
       .filter((s) => s && s !== "draft");
 
+    // Voting page reads existing production nominations only.
     const nominations = await Nomination.find({ status: { $in: statuses } }).sort({
       created_at: -1,
     });
@@ -155,7 +48,7 @@ router.get("/draft", async (req: Request, res: Response) => {
       return;
     }
 
-    const draft = await Nomination.findOne({ draft_token: token, status: "draft" });
+    const draft = await AfterSessionNomination.findOne({ draft_token: token, lifecycle: "draft" });
     if (!draft) {
       res.status(404).json({ error: "Draft not found. Please start again." });
       return;
@@ -195,10 +88,10 @@ router.post("/draft", async (req: Request, res: Response) => {
         ? { full_name: nominatorName, student_name: null }
         : { student_name: nominatorName, full_name: null };
 
-    const existing = await Nomination.findOne({
+    const existing = await AfterSessionNomination.findOne({
       nominator_phone: nominatorPhone,
       type: body.type,
-      status: "draft",
+      lifecycle: "draft",
     });
 
     if (existing) {
@@ -216,24 +109,42 @@ router.post("/draft", async (req: Request, res: Response) => {
       for (const [key, value] of Object.entries(utm)) {
         if (value) (existing as unknown as Record<string, unknown>)[key] = value;
       }
+      try {
+        applyDraftFields(existing, body);
+      } catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : "Invalid draft fields" });
+        return;
+      }
       await existing.save();
       res.json(draftPayload(existing));
       return;
     }
 
-    const draft = await Nomination.create({
+    const draft = await AfterSessionNomination.create({
       type: body.type,
       nominator_name: nominatorName,
       nominator_phone: nominatorPhone,
       phone: nominatorPhone,
       award_category: body.award_category || "General Nomination",
-      status: "draft",
+      email: sanitizeEmail(body.email),
+      lifecycle: "draft",
+      admin_status: "NEW",
+      source_form: "inline_draft",
       form_step: resume ? "otp_verified" : "identity",
       phone_verified: resume,
       draft_token: draftToken,
+      raw_payload: {},
+      extra_fields: {},
       ...identity,
       ...utm,
     });
+    try {
+      applyDraftFields(draft, body);
+      await draft.save();
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Invalid draft fields" });
+      return;
+    }
 
     res.status(201).json(draftPayload(draft));
   } catch (err) {
@@ -251,14 +162,12 @@ router.patch("/draft", async (req: Request, res: Response) => {
       return;
     }
 
-    const draft = await Nomination.findOne({ draft_token: token, status: "draft" });
+    const draft = await AfterSessionNomination.findOne({ draft_token: token, lifecycle: "draft" });
     if (!draft) {
       res.status(404).json({ error: "Draft not found. Please start again." });
       return;
     }
 
-    // Switching between student and teacher rewrites the identity fields, since
-    // the same person is the nominee in one case and the nominator in the other.
     if (typeof body.type === "string" && body.type !== draft.type) {
       if (!VALID_TYPES.includes(body.type as (typeof VALID_TYPES)[number])) {
         res.status(400).json({ error: "type must be student or teacher" });
@@ -306,13 +215,15 @@ router.patch("/draft", async (req: Request, res: Response) => {
         res.status(400).json({ error: err instanceof Error ? err.message : "Please complete the form" });
         return;
       }
-      draft.status = "pending";
+      draft.lifecycle = "submitted";
+      draft.admin_status = "NEW";
       draft.form_step = "submitted";
+      draft.submitted_at = new Date();
+      draft.source_form = draft.source_form || "inline_draft";
       await draft.save();
-      await Nomination.updateOne({ _id: draft._id }, { $unset: { draft_token: 1 } });
-      const submitted = await Nomination.findById(draft._id);
-      await notifyStudentOnNominate(submitted ?? draft);
-      res.json((submitted ?? draft).toJSON());
+      await AfterSessionNomination.updateOne({ _id: draft._id }, { $unset: { draft_token: 1 } });
+      const submitted = await AfterSessionNomination.findById(draft._id);
+      res.json(toClientJson(submitted ?? draft));
       return;
     }
 
@@ -355,7 +266,7 @@ router.post("/", async (req: Request, res: Response) => {
       return;
     }
 
-    const nomination = await Nomination.create({
+    const nomination = await AfterSessionNomination.create({
       type: body.type,
       student_name: body.student_name ?? null,
       student_class: body.student_class ?? null,
@@ -376,19 +287,27 @@ router.post("/", async (req: Request, res: Response) => {
       full_name: body.full_name ?? null,
       experience: body.experience ?? null,
       photo_url: photoUrl,
+      email: sanitizeEmail(body.email),
+      nominator_name: body.nominator_name ? String(body.nominator_name).trim() : null,
       nominator_phone: cleanPhone(body.nominator_phone) || null,
       utm_source: sanitizeUtm(body.utm_source),
       utm_medium: sanitizeUtm(body.utm_medium),
       utm_campaign: sanitizeUtm(body.utm_campaign),
       utm_term: sanitizeUtm(body.utm_term),
       utm_content: sanitizeUtm(body.utm_content),
-      status: "pending",
+      lifecycle: "submitted",
+      admin_status: "NEW",
+      source_form: "one_shot_api",
       form_step: "submitted",
       phone_verified: true,
+      submitted_at: new Date(),
+      extra_fields: {},
+      raw_payload: {},
     });
+    applyDraftFields(nomination, body);
+    await nomination.save();
 
-    await notifyStudentOnNominate(nomination);
-    res.status(201).json(nomination.toJSON());
+    res.status(201).json(toClientJson(nomination));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to submit nomination";
     res.status(500).json({ error: message });

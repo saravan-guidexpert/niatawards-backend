@@ -1,6 +1,9 @@
 import { Schema, model } from "mongoose";
 import { randomUUID } from "crypto";
 
+// Production nominations only. New public submissions go to AfterSessionNomination
+// (`after_session_nominations`) and must never be written here.
+
 export const NOMINATION_FORM_STEPS = [
   "identity",
   "otp_sent",

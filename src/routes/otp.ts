@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { Msg91Error } from "../lib/msg91";
 import { OtpError, cleanPhone, generateAndSendOtp, isValidOtp, isValidPhone, verifyStoredOtp } from "../lib/otp";
-import { Nomination } from "../models/Nomination";
+import { AfterSessionNomination } from "../models/AfterSessionNomination";
 
 const router = Router();
 
@@ -9,14 +9,14 @@ const markDraftVerified = async (phone: string, draftToken: unknown) => {
   const token = typeof draftToken === "string" ? draftToken.trim() : "";
   const update = { phone_verified: true, form_step: "otp_verified" as const };
   if (token) {
-    const byToken = await Nomination.findOneAndUpdate(
-      { draft_token: token, status: "draft" },
+    const byToken = await AfterSessionNomination.findOneAndUpdate(
+      { draft_token: token, lifecycle: "draft" },
       update
     );
     if (byToken) return;
   }
-  await Nomination.findOneAndUpdate(
-    { nominator_phone: phone, status: "draft" },
+  await AfterSessionNomination.findOneAndUpdate(
+    { nominator_phone: phone, lifecycle: "draft" },
     update,
     { sort: { created_at: -1 } }
   );
