@@ -3,8 +3,13 @@ import { randomUUID } from "crypto";
 
 export const VIDEO_JOB_STATUSES = ["running", "completed", "cancelled"] as const;
 export const VIDEO_JOB_MODES = ["generate", "regenerate", "retry"] as const;
-export const VIDEO_JOB_ITEM_STATUSES = ["QUEUED", "PROCESSING", "COMPLETED", "FAILED", "CANCELLED"] as const;
+export const VIDEO_JOB_TYPES = ["video", "portrait", "image_plus_video"] as const;
+export const VIDEO_JOB_ITEM_STATUSES = ["QUEUED", "PROCESSING", "COMPLETED", "FAILED", "BLOCKED", "CANCELLED"] as const;
 export const VIDEO_FAILURE_STAGES = [
+  "CLASSIFYING",
+  "GENERATING_IMAGE",
+  "CROPPING_IMAGE",
+  "UPLOADING_IMAGE",
   "PORTRAIT_RESOLUTION",
   "VIDEO_RENDER",
   "AUDIO",
@@ -14,6 +19,7 @@ export const VIDEO_FAILURE_STAGES = [
 
 export type VideoJobStatus = (typeof VIDEO_JOB_STATUSES)[number];
 export type VideoJobMode = (typeof VIDEO_JOB_MODES)[number];
+export type VideoJobType = (typeof VIDEO_JOB_TYPES)[number];
 export type VideoJobItemStatus = (typeof VIDEO_JOB_ITEM_STATUSES)[number];
 export type VideoFailureStage = (typeof VIDEO_FAILURE_STAGES)[number];
 
@@ -23,6 +29,7 @@ export type VideoJobCurrent = {
   teacher_phone: string;
   category_id: string;
   category_icon_filename: string | null;
+  stage?: VideoFailureStage | null;
 };
 
 export type VideoJobRecentItem = {
@@ -47,6 +54,9 @@ const videoGenerationJobSchema = new Schema(
     job_number: { type: Number, required: true, unique: true },
     status: { type: String, required: true, enum: VIDEO_JOB_STATUSES, default: "running" },
     mode: { type: String, required: true, enum: VIDEO_JOB_MODES, default: "generate" },
+    job_type: { type: String, enum: VIDEO_JOB_TYPES, default: "video" },
+    include_portraits: { type: Boolean, default: false },
+    force_without_photo: { type: Boolean, default: false },
     category_id: { type: String, default: null },
     kind: { type: String, default: null },
     photo: { type: String, default: null },
@@ -56,11 +66,13 @@ const videoGenerationJobSchema = new Schema(
     processing: { type: Number, default: 0 },
     completed: { type: Number, default: 0 },
     failed: { type: Number, default: 0 },
+    blocked: { type: Number, default: 0 },
     cancelled: { type: Number, default: 0 },
     avg_ms: { type: Number, default: 0 },
     recent_durations_ms: { type: [Number], default: [] },
     current: { type: Schema.Types.Mixed, default: null },
     recent: { type: [Schema.Types.Mixed], default: [] },
+    verification: { type: Schema.Types.Mixed, default: null },
     cancel_requested: { type: Boolean, default: false },
     created_by: { type: String, default: null },
     started_at: { type: Date, default: Date.now },

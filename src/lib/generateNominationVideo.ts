@@ -14,6 +14,7 @@ import { rasterizeCategoryIcon, resolveCategoryIcon } from "./categoryIcons";
 import {
   STUDENT_VIDEO_TEMPLATE,
   isFinalizedPortrait,
+  isVerifiedProductionCrop,
   nominationKind,
   teacherDisplayName,
   templatePlacesCategoryIcon,
@@ -21,7 +22,7 @@ import {
   videoTemplateOf,
   type VideoTemplateVariant,
 } from "./nominationKind";
-import { videoSatisfiesNomination } from "./videoIdentity";
+import { videoProductionValid } from "./videoIdentity";
 import {
   bgRemoveRoot,
   encodeTeacherVideo,
@@ -79,6 +80,8 @@ export const generateNominationVideo = async (opts: {
   nominationId: string;
   jobId?: string | null;
   regenerate?: boolean;
+  forceWithoutPhoto?: boolean;
+  onStage?: (stage: VideoFailureStage) => void | Promise<void>;
 }): Promise<{
   nomination_id: string;
   render_id: string;
@@ -89,6 +92,7 @@ export const generateNominationVideo = async (opts: {
   category_icon_filename: string;
 }> => {
   const nominationId = String(opts.nominationId || "").trim();
+  // Production Nomination documents only. AfterSessionNomination IDs will not match.
   const nom = await Nomination.findById(nominationId)
     .select(
       "_id type status student_class phone teacher_name full_name nominator_name student_name photo_url"
@@ -102,11 +106,14 @@ export const generateNominationVideo = async (opts: {
   const existing = await NominationVideo.findOne({ nomination_id: nominationId }).lean();
   const expectedKind = nominationKind(nom);
   const variant = videoTemplateOf(expectedKind);
+  const wantsPhoto = opts.forceWithoutPhoto ? false : hasSourcePhoto(nom.photo_url);
+  const sourcePhoto = hasSourcePhoto(nom.photo_url);
   if (
-    videoSatisfiesNomination({
+    videoProductionValid({
       video: existing,
       nominationId,
       expectedKind,
+      expectedPhoto: sourcePhoto ? "with_photo" : "without_photo",
     }) &&
     !opts.regenerate
   ) {
@@ -125,12 +132,15 @@ export const generateNominationVideo = async (opts: {
   const teacherName = teacherDisplayName(nom);
   if (!teacherName) throw new VideoPipelineError("VIDEO_RENDER", "missing teacher name");
   const nominatorName = String(nom.student_name || nom.nominator_name || "").trim();
-  const wantsPhoto = hasSourcePhoto(nom.photo_url);
   const videoCategory: "with_photo" | "without_photo" = wantsPhoto ? "with_photo" : "without_photo";
+  const reportStage = async (stage: VideoFailureStage) => {
+    await opts.onStage?.(stage);
+  };
 
   let croppedUrl = "";
   let croppedLocal = "";
   if (wantsPhoto) {
+    await reportStage("PORTRAIT_RESOLUTION");
     if (!phone) {
       throw new VideoPipelineError("PORTRAIT_RESOLUTION", "teacher phone is missing or invalid");
     }
@@ -139,6 +149,12 @@ export const generateNominationVideo = async (opts: {
       throw new VideoPipelineError(
         "PORTRAIT_RESOLUTION",
         "teacher does not have a valid finalized TeacherPortrait"
+      );
+    }
+    if (!isVerifiedProductionCrop(portrait)) {
+      throw new VideoPipelineError(
+        "PORTRAIT_RESOLUTION",
+        "portrait crop is unverified (not -top60 and crop_version missing); skipped"
       );
     }
     const portraitPhone = usableTeacherPhone(portrait?.teacher_phone);
@@ -191,6 +207,7 @@ export const generateNominationVideo = async (opts: {
 
   let encoded;
   try {
+    await reportStage("VIDEO_RENDER");
     encoded = await encodeTeacherVideo({
       nominationId,
       teacherName,
@@ -209,6 +226,7 @@ export const generateNominationVideo = async (opts: {
     );
   }
 
+  await reportStage("AUDIO");
   if (!audioOk(encoded.payload)) {
     throw new VideoPipelineError("AUDIO", "rendered MP4 is missing a valid audio stream");
   }
@@ -233,6 +251,7 @@ export const generateNominationVideo = async (opts: {
 
   let published;
   try {
+    await reportStage("CLOUDINARY_UPLOAD");
     published = await publishTeacherVideo(encoded, nominationId);
   } catch (err) {
     throw new VideoPipelineError(
@@ -242,6 +261,7 @@ export const generateNominationVideo = async (opts: {
   }
 
   try {
+    await reportStage("DATABASE");
     await NominationVideo.findOneAndUpdate(
       { nomination_id: nominationId },
       {
@@ -257,6 +277,7 @@ export const generateNominationVideo = async (opts: {
           portrait_cloudinary_url: wantsPhoto ? croppedUrl : null,
           photo_used: photoUsed,
           video_category: videoCategory,
+          production_photo_fallback: Boolean(opts.forceWithoutPhoto && sourcePhoto),
           category_icon_id: icon.category_icon_id,
           category_icon_filename: icon.category_icon_filename,
           audio_filename: PRODUCTION_AUDIO_FILENAME,
@@ -284,6 +305,29 @@ export const generateNominationVideo = async (opts: {
     category_icon_id: icon.category_icon_id,
     category_icon_filename: icon.category_icon_filename,
   };
+};
+
+export const markNominationVideoBlocked = async (
+  nominationId: string,
+  error: string,
+  jobId?: string | null
+) => {
+  const existing = await NominationVideo.findOne({ nomination_id: nominationId })
+    .lean()
+    .catch(() => null);
+  const keepExisting = isSuccessfulFinalVideo(existing);
+  await NominationVideo.findOneAndUpdate(
+    { nomination_id: nominationId },
+    {
+      $set: {
+        nomination_id: nominationId,
+        ...(keepExisting ? {} : { generation_status: "pending", ready_for_message: false }),
+        generation_error: error.slice(0, 2000),
+        generation_job_id: jobId ? String(jobId) : null,
+      },
+    },
+    { upsert: true }
+  ).catch(() => undefined);
 };
 
 export const markNominationVideoFailed = async (

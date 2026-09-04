@@ -13,6 +13,7 @@ import {
 import { activeLiveStatuses } from "./videoGenerationWorker";
 
 export const loadAdminTeacherCatalog = async () => {
+  // Explicit Nomination collection only — AfterSessionNomination is never catalogued.
   const [nominations, portraits, videos, live] = await Promise.all([
     Nomination.find({ status: { $ne: "draft" } })
       .select("_id type student_class phone teacher_name full_name nominator_name photo_url created_at")
@@ -20,7 +21,7 @@ export const loadAdminTeacherCatalog = async () => {
     TeacherPortrait.find({}).lean(),
     NominationVideo.find({})
       .select(
-        "nomination_id generation_status video_url video_render_id category_icon_id category_icon_filename nomination_kind video_template"
+        "nomination_id generation_status video_url video_render_id category_icon_id category_icon_filename nomination_kind video_template photo_used video_category production_photo_fallback audio_filename"
       )
       .lean(),
     activeLiveStatuses(),

@@ -63,6 +63,9 @@ export const WHATSAPP_ENV_HINT_KEYS = [
   "GUPSHUP_WEBHOOK_AUTH_REQUIRED",
   "GUPSHUP_TEMPLATE_TEACHER_SUBMIT",
   "GUPSHUP_TEMPLATE_STUDENT_NOMINATE",
+  "GUPSHUP_TEMPLATE_STUDENT_NOMINATED_TEACHER",
+  "GUPSHUP_TEMPLATE_TEACHER_NOMINATED",
+  "GUPSHUP_TEMPLATE_TEACHER_NOMINATED_OTHER",
 ] as const;
 
 export const listedWhatsAppEnvHints = () => {
@@ -154,7 +157,11 @@ export const sendTemplateMessage = async (
   phone: string,
   templateId: string,
   params: string[] = [],
-  opts: { headerImageUrl?: string | null; templateEnvKey?: string | null } = {}
+  opts: {
+    headerImageUrl?: string | null;
+    headerVideoUrl?: string | null;
+    templateEnvKey?: string | null;
+  } = {}
 ): Promise<GupshupSendResult> => {
   const emptyIds = {
     gupshupInternalMessageId: null,
@@ -181,8 +188,12 @@ export const sendTemplateMessage = async (
   body.append("destination", destination);
   body.append("channel", "whatsapp");
   body.append("template", JSON.stringify({ id: templateId, params: params.map((p) => String(p)) }));
-  if (opts.headerImageUrl?.trim()) {
-    body.append("message", JSON.stringify({ type: "image", image: { link: opts.headerImageUrl.trim() } }));
+  const headerVideoUrl = opts.headerVideoUrl?.trim() || "";
+  const headerImageUrl = opts.headerImageUrl?.trim() || "";
+  if (headerVideoUrl) {
+    body.append("message", JSON.stringify({ type: "video", video: { link: headerVideoUrl } }));
+  } else if (headerImageUrl) {
+    body.append("message", JSON.stringify({ type: "image", image: { link: headerImageUrl } }));
   }
   if (process.env.GUPSHUP_SRC_NAME?.trim()) {
     body.append("src.name", process.env.GUPSHUP_SRC_NAME.trim());
@@ -193,7 +204,7 @@ export const sendTemplateMessage = async (
       event: "gupshup_template_send",
       mask: maskPhone(phone),
       templateEnvKey: opts.templateEnvKey || null,
-      templateId,
+      headerType: headerVideoUrl ? "video" : headerImageUrl ? "image" : null,
       paramCount: params.length,
     })
   );
@@ -236,6 +247,6 @@ export const sendTemplateMessage = async (
     return { success: false, error: errMsg, data, ids, httpStatus: res.status };
   }
 
-  console.log("[Gupshup] Template submitted", maskPhone(phone), templateId);
+  console.log("[Gupshup] Template submitted", maskPhone(phone), opts.templateEnvKey || "template");
   return { success: true, data, ids, httpStatus: res.status };
 };

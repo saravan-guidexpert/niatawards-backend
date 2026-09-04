@@ -1,5 +1,6 @@
 import {
   videoIdentityMismatch,
+  videoProductionValid,
   videoSatisfiesNomination,
 } from "../src/lib/videoIdentity";
 
@@ -72,6 +73,46 @@ assert(
     expectedKind: "teacher",
   }),
   "unlabeled teacher-self videos are accepted because they were never in the student bulk"
+);
+
+assert(
+  !videoProductionValid({
+    video: {
+      ...studentVideo,
+      photo_used: false,
+      video_category: "without_photo",
+    },
+    nominationId: "n1",
+    expectedKind: "student",
+    expectedPhoto: "with_photo",
+  }),
+  "with-photo nomination playing a without-photo MP4 is INVALID"
+);
+assert(
+  videoProductionValid({
+    video: {
+      ...studentVideo,
+      photo_used: true,
+      video_category: "with_photo",
+    },
+    nominationId: "n1",
+    expectedKind: "student",
+    expectedPhoto: "with_photo",
+  }),
+  "with-photo nomination with photo_used and video_category with_photo is VALID"
+);
+assert(
+  videoProductionValid({
+    video: {
+      ...studentVideo,
+      photo_used: false,
+      video_category: "without_photo",
+    },
+    nominationId: "n1",
+    expectedKind: "student",
+    expectedPhoto: "without_photo",
+  }),
+  "without-photo nomination with a no-photo MP4 is VALID"
 );
 
 console.log("videoIdentity selftest passed");

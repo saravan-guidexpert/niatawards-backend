@@ -2,6 +2,7 @@ import { Types } from "mongoose";
 import { WhatsAppMessageEvent } from "../models/WhatsAppMessageEvent";
 import { WhatsAppRetryGroup } from "../models/WhatsAppRetryGroup";
 import { maybeSettleRetryGroup, sendWhatsApp } from "./whatsappSend";
+import { isNominationVideoWhatsAppKind } from "./nominationVideoWhatsApp";
 import { ensureTeacherSubmitParams } from "./teacherSubmitWhatsApp";
 import {
   isMetaPermanentProviderError,
@@ -119,6 +120,14 @@ const unstickEmptyBatch = async (groupId: Types.ObjectId, nextAttempt: number, b
 };
 
 const promoteGroup = async (group: GroupLean, now: Date) => {
+  if (isNominationVideoWhatsAppKind(group.messageKind)) {
+    await WhatsAppRetryGroup.updateOne(
+      { _id: group._id, status: "open" },
+      { $set: { status: "closed_no_more_retries", nextPromotionDueAt: null, updatedAt: now } }
+    );
+    return { outcome: "video_manual_only" as const, sent: 0 };
+  }
+
   const delivered = await WhatsAppMessageEvent.exists({
     retryGroupId: group._id,
     status: { $in: [...TERMINAL_SUCCESS_STATUSES] },

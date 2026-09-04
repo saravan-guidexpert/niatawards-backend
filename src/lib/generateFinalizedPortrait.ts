@@ -15,6 +15,7 @@ import { firstEnv } from "./projectPaths";
 import {
   isFinalizedPortrait,
   isStalePortraitClaim,
+  isVerifiedProductionCrop,
   teacherDisplayName,
   usableTeacherPhone,
 } from "./nominationKind";
@@ -320,7 +321,7 @@ export const generateFinalizedPortrait = async (opts: {
   const noms = (await Nomination.find({
     status: { $ne: "draft" },
     phone: { $regex: phone },
-  })
+  }) // Nomination collection only — AfterSessionNomination is excluded by model.
     .select("_id type student_class teacher_name full_name nominator_name photo_url phone created_at")
     .lean()) as Array<NomRow & { phone?: unknown }>;
   const forPhone = noms.filter((n) => usableTeacherPhone(n.phone) === phone);
@@ -395,7 +396,7 @@ export const generateFinalizedPortrait = async (opts: {
     const downloaded = await downloadPhoto(photoUrl, path.join(workDir, "source"));
     const rawPng = path.join(workDir, "gpt-raw.png");
     const croppedPng = path.join(workDir, "cropped.png");
-    const client = new OpenAI({ apiKey, baseURL });
+    const client = new OpenAI({ apiKey, baseURL, timeout: 180_000, maxRetries: 0 });
     await generateImage(client, downloaded.dest, downloaded.contentType, rawPng);
     const cropped = cropPortraitPng(fs.readFileSync(rawPng));
     if (cropped.geometry.size[0] !== 1080 || cropped.geometry.size[1] !== 1920) {
@@ -443,4 +444,59 @@ export const generateFinalizedPortrait = async (opts: {
   } finally {
     fs.rmSync(workDir, { recursive: true, force: true });
   }
+};
+
+/**
+ * Teacher-level portrait gate for video jobs. Combined image+video jobs may
+ * generate a missing portrait; unverified crops are never used for production.
+ */
+export const ensureVerifiedProductionPortrait = async (opts: {
+  phone: string;
+  generateIfMissing: boolean;
+  onStage?: (stage: "GENERATING_IMAGE" | "CROPPING_IMAGE" | "UPLOADING_IMAGE") => void | Promise<void>;
+}): Promise<{ ok: true } | { ok: false; blocked: string }> => {
+  const phone = usableTeacherPhone(opts.phone);
+  if (!phone) return { ok: false, blocked: "BLOCKED — teacher phone is missing or invalid" };
+
+  const load = () => TeacherPortrait.findOne({ teacher_phone: phone }).lean();
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const portrait = await load();
+    if (isVerifiedProductionCrop(portrait)) return { ok: true };
+    if (isFinalizedPortrait(portrait) && !isVerifiedProductionCrop(portrait)) {
+      return { ok: false, blocked: "BLOCKED — PORTRAIT NEEDS VERIFICATION" };
+    }
+    if (isActivelyGenerating(portrait)) {
+      await sleep(5000);
+      continue;
+    }
+    if (!opts.generateIfMissing) {
+      return { ok: false, blocked: "BLOCKED — PORTRAIT NOT READY" };
+    }
+    await opts.onStage?.("GENERATING_IMAGE");
+    const result = await generateFinalizedPortrait({ phone, regenerate: false });
+    if (result.ok && !result.skipped) {
+      const after = await load();
+      if (isVerifiedProductionCrop(after)) return { ok: true };
+      return { ok: false, blocked: "BLOCKED — PORTRAIT NEEDS VERIFICATION" };
+    }
+    if (result.ok && result.skipped && result.reason === "generating") {
+      await sleep(5000);
+      continue;
+    }
+    if (result.ok && result.skipped && result.reason === "already_finalized") {
+      const after = await load();
+      if (isVerifiedProductionCrop(after)) return { ok: true };
+      return { ok: false, blocked: "BLOCKED — PORTRAIT NEEDS VERIFICATION" };
+    }
+    if (result.ok && result.skipped && result.reason === "no_photo") {
+      return { ok: false, blocked: "BLOCKED — PORTRAIT NOT READY" };
+    }
+    if (!result.ok && "needs_review" in result && result.needs_review) {
+      return { ok: false, blocked: `BLOCKED — ${result.reason}` };
+    }
+    if (!result.ok && "error" in result) {
+      return { ok: false, blocked: `BLOCKED — ${result.error}` };
+    }
+  }
+  return { ok: false, blocked: "BLOCKED — PORTRAIT NOT READY" };
 };

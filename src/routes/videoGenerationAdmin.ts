@@ -6,15 +6,15 @@ import {
   PHOTO_STATES,
   categoryIdOf,
   exactCategoryOf,
-  isFinalizedPortrait,
+  isVerifiedProductionCrop,
   teacherDisplayName,
-  usableTeacherPhone,
   videoTemplateOf,
   type NominationKind,
   type PhotoState,
 } from "../lib/nominationKind";
-import { videoSatisfiesNomination } from "../lib/videoIdentity";
+import { videoProductionValid } from "../lib/videoIdentity";
 import { loadAdminTeacherCatalog } from "../lib/loadTeacherCatalog";
+import { catalogLookupKey, type CategoryTeacher } from "../lib/teacherPortraitCatalog";
 import {
   assertVideoRenderReady,
   bgRemoveRoot,
@@ -37,6 +37,7 @@ import {
   createVideoGenerationJob,
   jobPublicView,
   planVideosForTeachers,
+  retryBlockedVideoJob,
   retryFailedVideoJob,
 } from "../lib/videoGenerationWorker";
 import fs from "fs";
@@ -58,7 +59,45 @@ const requireKindPhoto = (kindRaw: unknown, photoRaw: unknown) => {
 
 const phonesFromBody = (body: Record<string, unknown>) => {
   const raw = Array.isArray(body.phones) ? body.phones : body.phone ? [body.phone] : [];
-  return [...new Set(raw.map((value) => usableTeacherPhone(value)).filter(Boolean))];
+  return [...new Set(raw.map((value) => catalogLookupKey(value)).filter(Boolean))];
+};
+
+const nominationIdsFromBody = (body: Record<string, unknown>) => {
+  const raw = Array.isArray(body.nomination_ids)
+    ? body.nomination_ids
+    : body.nomination_id
+      ? [body.nomination_id]
+      : [];
+  return [...new Set(raw.map((value) => String(value || "").trim()).filter(Boolean))];
+};
+
+const teachersForCategory = (
+  bucket: Map<string, CategoryTeacher> | undefined,
+  phones: string[],
+  nominationIds: string[]
+) => {
+  const map = bucket || new Map<string, CategoryTeacher>();
+  const idSet = nominationIds.length ? new Set(nominationIds) : null;
+  let teachers: CategoryTeacher[] = [];
+  if (phones.length) {
+    teachers = phones.map((phone) => map.get(phone)).filter((row): row is CategoryTeacher => Boolean(row));
+  } else if (idSet) {
+    teachers = [...map.values()].filter((row) => row.nomination_ids.some((id) => idSet.has(id)));
+  }
+  if (idSet) {
+    teachers = teachers
+      .map((row) => {
+        const nomination_ids = row.nomination_ids.filter((id) => idSet.has(id));
+        return {
+          ...row,
+          nomination_ids,
+          nomination_count: nomination_ids.length,
+          nominations: row.nominations.filter((n) => idSet.has(String(n._id))),
+        };
+      })
+      .filter((row) => row.nomination_ids.length);
+  }
+  return teachers;
 };
 
 const renderError = () => {
@@ -139,32 +178,36 @@ router.post("/estimate", async (req: Request, res: Response) => {
     const { kind, photo } = requireKindPhoto(body.kind, body.photo);
     const regenerate = Boolean(body.regenerate);
     const phones = phonesFromBody(body);
+    const nominationIds = nominationIdsFromBody(body);
     if (!kind || !photo) {
       res.status(400).json({ error: "kind and photo are required so videos stay in the selected category" });
       return;
     }
-    if (!phones.length) {
-      res.status(400).json({ error: "Select one or more teachers" });
+    if (!phones.length && !nominationIds.length) {
+      res.status(400).json({ error: "Select one or more teachers or nominations" });
       return;
     }
-    const { buckets, portraitsMap, videosMap } = await loadAdminTeacherCatalog();
+    const { buckets, portraitsMap, videosMap, live } = await loadAdminTeacherCatalog();
     const categoryId = categoryIdOf(kind, photo);
-    const teachers = phones
-      .map((phone) => buckets.get(categoryId)?.get(phone))
-      .filter((row): row is NonNullable<typeof row> => Boolean(row));
+    const teachers = teachersForCategory(buckets.get(categoryId), phones, nominationIds);
     const plan = planVideosForTeachers({
       teachers,
       portraits: portraitsMap,
       videos: videosMap,
       regenerate,
+      nominationIds,
+      includePortraits: Boolean(body.include_portraits),
+      live,
     });
     res.json({
       teachers: teachers.length,
       eligible_nominations: plan.eligible_nominations,
       already_generated: plan.already_generated,
       blocked_missing_portrait: plan.blocked_missing_portrait,
+      invalid_will_regenerate: plan.invalid_will_regenerate,
       to_generate: plan.queued.length,
       regenerate,
+      include_portraits: Boolean(body.include_portraits),
       audio: PRODUCTION_AUDIO_FILENAME,
       audio_attached: true,
     });
@@ -180,24 +223,27 @@ router.post("/jobs", async (req: Request, res: Response) => {
     const { kind, photo } = requireKindPhoto(body.kind, body.photo);
     const regenerate = Boolean(body.regenerate);
     const phones = phonesFromBody(body);
+    const nominationIds = nominationIdsFromBody(body);
     if (!kind || !photo) {
       res.status(400).json({ error: "kind and photo are required so videos stay in the selected category" });
       return;
     }
-    if (!phones.length) {
-      res.status(400).json({ error: "Select one or more teachers" });
+    if (!phones.length && !nominationIds.length) {
+      res.status(400).json({ error: "Select one or more teachers or nominations" });
       return;
     }
-    const { buckets, portraitsMap, videosMap } = await loadAdminTeacherCatalog();
+    const { buckets, portraitsMap, videosMap, live } = await loadAdminTeacherCatalog();
     const categoryId = categoryIdOf(kind, photo);
-    const teachers = phones
-      .map((phone) => buckets.get(categoryId)?.get(phone))
-      .filter((row): row is NonNullable<typeof row> => Boolean(row));
+    const teachers = teachersForCategory(buckets.get(categoryId), phones, nominationIds);
+    const includePortraits = Boolean(body.include_portraits);
     const plan = planVideosForTeachers({
       teachers,
       portraits: portraitsMap,
       videos: videosMap,
       regenerate,
+      nominationIds,
+      includePortraits,
+      live,
     });
     if (!plan.queued.length) {
       res.status(400).json({
@@ -208,6 +254,7 @@ router.post("/jobs", async (req: Request, res: Response) => {
         eligible_nominations: plan.eligible_nominations,
         already_generated: plan.already_generated,
         blocked_missing_portrait: plan.blocked_missing_portrait,
+        invalid_will_regenerate: plan.invalid_will_regenerate,
         to_generate: 0,
       });
       return;
@@ -219,15 +266,43 @@ router.post("/jobs", async (req: Request, res: Response) => {
       kind,
       photo,
       planned: plan.queued,
+      blocked: plan.blocked,
       created_by: createdBy,
+      include_portraits: includePortraits,
+      job_type: includePortraits ? "image_plus_video" : "video",
     });
     res.status(202).json({
       job: jobPublicView(job.toObject()),
       queued_videos: plan.queued.length,
+      blocked_videos: plan.blocked.length,
       teachers: plan.teacher_count,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to start generation job";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post("/jobs/without-photo-bulk", async (req: Request, res: Response) => {
+  try {
+    const createdBy = req.admin?.username || req.admin?.id || "without-photo-bulk";
+    const { createWithoutPhotoBulkJob } = await import("../lib/withoutPhotoBulkJob");
+    const { job, audit, queued } = await createWithoutPhotoBulkJob({ created_by: createdBy });
+    if (!job) {
+      res.status(400).json({
+        error: "No pending WITHOUT-PHOTO videos to generate",
+        audit: audit.buckets,
+        to_generate: 0,
+      });
+      return;
+    }
+    res.status(202).json({
+      job: jobPublicView(job.toObject()),
+      queued_videos: queued,
+      audit: audit.buckets,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to start WITHOUT-PHOTO bulk job";
     res.status(500).json({ error: message });
   }
 });
@@ -257,16 +332,27 @@ router.post("/jobs/:id/retry-failed", async (req: Request, res: Response) => {
   }
 });
 
+router.post("/jobs/:id/retry-blocked", async (req: Request, res: Response) => {
+  try {
+    const createdBy = req.admin?.username || req.admin?.id || null;
+    const job = await retryBlockedVideoJob(String(req.params.id || ""), createdBy);
+    res.status(202).json({ job: jobPublicView(job.toObject()) });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to retry blocked videos";
+    res.status(400).json({ error: message });
+  }
+});
+
 router.get("/videos", async (req: Request, res: Response) => {
   try {
-    const phone = usableTeacherPhone(req.query.phone);
+    const phone = catalogLookupKey(req.query.phone);
     const { kind, photo } = requireKindPhoto(req.query.kind, req.query.photo);
     if (!kind || !photo) {
       res.status(400).json({ error: "kind and photo are required so videos stay in the selected category" });
       return;
     }
     if (!phone) {
-      res.status(400).json({ error: "A valid teacher phone is required" });
+      res.status(400).json({ error: "A teacher identity is required" });
       return;
     }
     const { buckets } = await loadAdminTeacherCatalog();
@@ -286,10 +372,11 @@ router.get("/videos", async (req: Request, res: Response) => {
     const videos = teacher.nomination_ids.flatMap((nominationId) => {
       const doc = byId.get(nominationId);
       if (
-        !videoSatisfiesNomination({
+        !videoProductionValid({
           video: doc,
           nominationId,
           expectedKind: teacher.kind,
+          expectedPhoto: teacher.photo,
         })
       ) {
         return [];
@@ -323,14 +410,14 @@ router.get("/videos", async (req: Request, res: Response) => {
 
 router.get("/preview", async (req: Request, res: Response) => {
   try {
-    const phone = usableTeacherPhone(req.query.phone);
+    const phone = catalogLookupKey(req.query.phone);
     const { kind, photo } = requireKindPhoto(req.query.kind, req.query.photo);
     if (!kind || !photo) {
       res.status(400).json({ error: "kind and photo are required so videos stay in the selected category" });
       return;
     }
     if (!phone) {
-      res.status(400).json({ error: "A valid teacher phone is required" });
+      res.status(400).json({ error: "A teacher identity is required" });
       return;
     }
     const { buckets, portraitsMap, videosMap } = await loadAdminTeacherCatalog();
@@ -365,8 +452,8 @@ router.get("/preview", async (req: Request, res: Response) => {
     let preparedPath = "";
     if (teacher.photo === "with_photo") {
       const portrait = portraitsMap.get(phone);
-      if (!isFinalizedPortrait(portrait)) {
-        res.status(409).json({ error: "Finalized image is required for with-photo preview" });
+      if (!isVerifiedProductionCrop(portrait)) {
+        res.status(409).json({ error: "A verified finalized portrait is required for with-photo preview" });
         return;
       }
       preparedPath = await materializeCroppedPortrait({

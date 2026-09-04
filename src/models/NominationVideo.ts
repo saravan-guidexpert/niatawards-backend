@@ -57,6 +57,9 @@ const nominationVideoSchema = new Schema(
     category_icon_id: { type: String, default: null },
     category_icon_filename: { type: String, default: null },
     video_category: { type: String, default: null, enum: ["with_photo", "without_photo", null] },
+    // Set when a with-photo nomination is rendered with the no-photo template
+    // because no verified portrait could be produced.
+    production_photo_fallback: { type: Boolean, default: false },
     audio_filename: { type: String, default: null },
     production_batch_id: { type: String, default: null },
     generation_job_id: { type: String, default: null },
@@ -77,5 +80,7 @@ const nominationVideoSchema = new Schema(
 
 nominationVideoSchema.index({ review_status: 1 });
 nominationVideoSchema.index({ generation_status: 1 });
+nominationVideoSchema.index({ generation_status: 1, generated_at: -1 });
+nominationVideoSchema.index({ nomination_kind: 1, video_category: 1 });
 
 export const NominationVideo = model("NominationVideo", nominationVideoSchema);

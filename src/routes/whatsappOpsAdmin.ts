@@ -13,6 +13,11 @@ import {
   toPhone10,
 } from "../lib/gupshup";
 import { sendWhatsApp } from "../lib/whatsappSend";
+import {
+  enqueueNominationVideoWhatsApp,
+  isNominationVideoWhatsAppKind,
+  queueNominationVideoWhatsAppJob,
+} from "../lib/nominationVideoWhatsApp";
 import { scanGroupsNeedingRetries } from "../lib/whatsappRetryOrchestrator";
 import { IN_FLIGHT_STATUSES, TERMINAL_SUCCESS_STATUSES } from "../lib/whatsappRetryRules";
 import {
@@ -110,6 +115,7 @@ const publicMessage = (row: Record<string, unknown>) => ({
   phone: row.phone,
   messageKind: row.messageKind,
   attemptNumber: row.attemptNumber,
+  retryCount: row.retryCount || 0,
   status: row.status,
   source: row.source,
   retrySource: row.retrySource,
@@ -122,7 +128,13 @@ const publicMessage = (row: Record<string, unknown>) => ({
   templateId: row.templateId,
   params: row.params,
   gupshupMessageId: row.gupshupMessageId,
+  nominationId: row.nominationId || null,
+  nominationVideoId: row.nominationVideoId || null,
+  nominationKind: row.nominationKind || null,
+  teacherName: row.teacherName || null,
+  videoUrl: row.videoUrl || row.headerVideoUrl || null,
   createdAt: row.createdAt,
+  updatedAt: row.updatedAt || null,
   sentAt: row.sentAt,
   deliveredAt: row.deliveredAt,
   readAt: row.readAt,
@@ -441,10 +453,51 @@ router.post("/actions/run-retries", requireSuperAdmin, async (_req: Request, res
   }
 });
 
+router.post("/actions/send-nomination-video", requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const nominationId = String(req.body?.nominationId || "").trim();
+    const nominationVideoId = String(req.body?.nominationVideoId || "").trim();
+    if (!nominationId && !nominationVideoId) {
+      res.status(400).json({ error: "nominationId is required" });
+      return;
+    }
+    const queued = await enqueueNominationVideoWhatsApp({
+      nominationId: nominationId || undefined,
+      nominationVideoId: nominationVideoId || undefined,
+      allowRetry: Boolean(req.body?.retry),
+      source: "admin_manual",
+    });
+    if (!queued.ok || !queued.eventId || !queued.shouldSend) {
+      res.status(queued.duplicate ? 409 : 400).json(queued);
+      return;
+    }
+    queueNominationVideoWhatsAppJob(queued.eventId);
+    res.json({
+      ok: true,
+      queued: true,
+      eventId: queued.eventId,
+      status: "queued",
+      nominationId: queued.plan?.nominationId || null,
+      nominationVideoId: queued.plan?.nominationVideoId || null,
+      nominationKind: queued.plan?.nominationKind || null,
+      templateEnvKey: queued.plan?.templateEnvKey || null,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to queue nomination video WhatsApp";
+    res.status(500).json({ error: message });
+  }
+});
+
 router.post("/actions/test-send", requireSuperAdmin, async (req: Request, res: Response) => {
   try {
     const phone = toPhone10(String(req.body?.phone || ""));
     const kind = String(req.body?.kind || "test").trim() || "test";
+    if (isNominationVideoWhatsAppKind(kind)) {
+      res.status(400).json({
+        error: "Nomination video templates must be sent with send-nomination-video, not the generic test send",
+      });
+      return;
+    }
     const params = Array.isArray(req.body?.params)
       ? req.body.params.map((p: unknown) => String(p ?? ""))
       : String(req.body?.params || "")
@@ -490,6 +543,22 @@ router.post("/actions/resend", requireSuperAdmin, async (req: Request, res: Resp
     }
     if (IN_FLIGHT_STATUSES.includes(event.status as (typeof IN_FLIGHT_STATUSES)[number])) {
       res.status(409).json({ error: "Message is still in flight" });
+      return;
+    }
+
+    if (isNominationVideoWhatsAppKind(event.messageKind)) {
+      const queued = await enqueueNominationVideoWhatsApp({
+        nominationId: event.nominationId || undefined,
+        nominationVideoId: event.nominationVideoId || undefined,
+        allowRetry: true,
+        source: "admin_manual",
+      });
+      if (!queued.ok || !queued.eventId || !queued.shouldSend) {
+        res.status(queued.duplicate ? 409 : 400).json(queued);
+        return;
+      }
+      queueNominationVideoWhatsAppJob(queued.eventId);
+      res.json({ ok: true, queued: true, eventId: queued.eventId, status: "queued" });
       return;
     }
 

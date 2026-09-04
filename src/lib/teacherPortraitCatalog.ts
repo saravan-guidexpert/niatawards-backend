@@ -13,7 +13,7 @@ import {
   type PortraitAdminStatus,
 } from "./nominationKind";
 import { hasSourcePhoto } from "./sourcePhoto";
-import { videoSatisfiesNomination, type VideoIdentityRecord } from "./videoIdentity";
+import { videoProductionValid, type VideoIdentityRecord } from "./videoIdentity";
 
 export type CatalogNomination = {
   _id: string;
@@ -57,6 +57,7 @@ export type VideoCounts = {
   pending: number;
   processing: number;
   failed: number;
+  blocked: number;
   total: number;
 };
 
@@ -67,6 +68,7 @@ export const VIDEO_ADMIN_FILTERS = [
   "not_generated_no_photo",
   "processing",
   "failed",
+  "blocked",
 ] as const;
 export type VideoAdminFilter = (typeof VIDEO_ADMIN_FILTERS)[number];
 
@@ -77,6 +79,7 @@ export type VideoTeacherCounts = {
   not_generated_no_photo: number;
   processing: number;
   failed: number;
+  blocked: number;
 };
 
 export const emptyVideoTeacherCounts = (): VideoTeacherCounts => ({
@@ -86,6 +89,7 @@ export const emptyVideoTeacherCounts = (): VideoTeacherCounts => ({
   not_generated_no_photo: 0,
   processing: 0,
   failed: 0,
+  blocked: 0,
 });
 
 export const isVideoAdminFilter = (value: unknown): value is VideoAdminFilter =>
@@ -107,7 +111,23 @@ export const matchesVideoAdminFilter = (
   }
   if (filter === "processing") return videos.processing > 0;
   if (filter === "failed") return videos.failed > 0;
+  if (filter === "blocked") return videos.blocked > 0;
   return true;
+};
+
+export const NO_PHONE_KEY_PREFIX = "nom:";
+
+export const catalogTeacherKey = (n: { _id?: unknown; phone?: unknown }) => {
+  const phone = usableTeacherPhone(n.phone);
+  return phone || `${NO_PHONE_KEY_PREFIX}${String(n._id || "")}`;
+};
+
+export const isNoPhoneCatalogKey = (key: unknown) => String(key || "").startsWith(NO_PHONE_KEY_PREFIX);
+
+export const catalogLookupKey = (value: unknown) => {
+  const raw = String(value ?? "").trim();
+  if (isNoPhoneCatalogKey(raw)) return raw;
+  return usableTeacherPhone(raw);
 };
 
 export type CategoryTeacher = {
@@ -120,6 +140,7 @@ export type CategoryTeacher = {
   nomination_ids: string[];
   source_photo_url: string | null;
   nominations: CatalogNomination[];
+  missing_phone: boolean;
 };
 
 const timeOf = (value: unknown) => {
@@ -132,6 +153,7 @@ export const emptyVideoCounts = (): VideoCounts => ({
   pending: 0,
   processing: 0,
   failed: 0,
+  blocked: 0,
   total: 0,
 });
 
@@ -139,7 +161,9 @@ export const videoCountsFor = (
   nominationIds: string[],
   videos: Map<string, CatalogVideo>,
   live: Map<string, VideoLiveStatus>,
-  expectedKind: NominationKind
+  expectedKind: NominationKind,
+  expectedPhoto: PhotoState,
+  portraitVerified: boolean
 ): VideoCounts => {
   const counts = emptyVideoCounts();
   counts.total = nominationIds.length;
@@ -150,10 +174,19 @@ export const videoCountsFor = (
       continue;
     }
     const video = videos.get(id);
-    if (videoSatisfiesNomination({ video, nominationId: id, expectedKind })) {
+    if (
+      videoProductionValid({
+        video,
+        nominationId: id,
+        expectedKind,
+        expectedPhoto,
+      })
+    ) {
       counts.generated += 1;
     } else if (String(video?.generation_status || "") === "failed") {
       counts.failed += 1;
+    } else if (expectedPhoto === "with_photo" && !portraitVerified) {
+      counts.blocked += 1;
     } else {
       counts.pending += 1;
     }
@@ -178,8 +211,8 @@ export const buildCategoryTeachers = (nominations: CatalogNomination[]) => {
 
   for (const n of nominations) {
     if (!isSubmittedNomination(n)) continue;
-    const phone = usableTeacherPhone(n.phone);
-    if (!phone) continue;
+    const phone = catalogTeacherKey(n);
+    if (!phone || phone === NO_PHONE_KEY_PREFIX) continue;
     const kind = nominationKind(n);
     const photo = photoStateOf(n.photo_url);
     const categoryId = categoryIdOf(kind, photo);
@@ -202,6 +235,7 @@ export const buildCategoryTeachers = (nominations: CatalogNomination[]) => {
       nomination_ids: [String(n._id)],
       source_photo_url: hasSourcePhoto(n.photo_url) ? String(n.photo_url) : null,
       nominations: [n],
+      missing_phone: isNoPhoneCatalogKey(phone),
     });
   }
 
@@ -251,6 +285,7 @@ export const emptyStatusCounts = (): Record<PortraitAdminStatus, number> => ({
   NOT_GENERATED: 0,
   GENERATING: 0,
   GENERATED: 0,
+  NEEDS_VERIFICATION: 0,
   NEEDS_REVIEW: 0,
   FAILED: 0,
   NO_PHOTO: 0,
@@ -278,25 +313,44 @@ export const teacherListItem = (
     adminStatus === "NEEDS_REVIEW" && !sourceLocked
       ? photoCandidates(allNomsForPhone?.length ? allNomsForPhone : teacher.nominations)
       : [];
+  const portraitVerified = teacher.photo === "without_photo" || adminStatus === "GENERATED";
   const videoCounts = videoCountsFor(
     teacher.nomination_ids,
     videos || new Map(),
     live || new Map(),
-    teacher.kind
+    teacher.kind,
+    teacher.photo,
+    portraitVerified
   );
+  const missingPhone = Boolean(teacher.missing_phone) || isNoPhoneCatalogKey(teacher.phone);
   const imageReady = teacher.photo === "without_photo" || adminStatus === "GENERATED";
+  const noPhoneWithPhoto = missingPhone && teacher.photo === "with_photo";
   return {
     phone: teacher.phone,
     name: teacher.name,
     kind: teacher.kind,
     photo: teacher.photo,
+    missing_phone: missingPhone,
     nomination_count: teacher.nomination_count,
     nomination_ids: teacher.nomination_ids,
+    nominations: teacher.nominations.map((n) => ({
+      id: String(n._id),
+      name: teacherDisplayName(n) || teacher.name,
+    })),
     portrait_status: adminStatus,
-    cropped_cloudinary_url: adminStatus === "GENERATED" ? String(portrait?.cropped_cloudinary_url || "").trim() || null : null,
+    cropped_cloudinary_url:
+      adminStatus === "GENERATED" || adminStatus === "NEEDS_VERIFICATION"
+        ? String(portrait?.cropped_cloudinary_url || "").trim() || null
+        : null,
     source_nomination_id: portrait?.source_nomination_id ? String(portrait.source_nomination_id) : null,
     source_photo_url: teacher.photo === "with_photo" ? teacher.source_photo_url : null,
-    portrait_error: portrait?.portrait_error ? String(portrait.portrait_error) : null,
+    portrait_error: noPhoneWithPhoto
+      ? "Teacher phone is missing — a finalized portrait cannot be stored"
+      : adminStatus === "NEEDS_VERIFICATION"
+        ? "Portrait exists but crop is unverified (missing -top60 / crop_version)"
+        : portrait?.portrait_error
+          ? String(portrait.portrait_error)
+          : null,
     generated_at: portrait?.generated_at ? new Date(portrait.generated_at).toISOString() : null,
     finalized_at: portrait?.finalized_at ? new Date(portrait.finalized_at).toISOString() : null,
     crop_version: portrait?.crop_version ? String(portrait.crop_version) : null,
@@ -305,9 +359,11 @@ export const teacherListItem = (
     preview_nomination_id: teacher.nomination_ids[0] || null,
     can_generate_image:
       teacher.photo === "with_photo" &&
+      !missingPhone &&
       adminStatus !== "GENERATED" &&
       adminStatus !== "GENERATING" &&
+      adminStatus !== "NEEDS_VERIFICATION" &&
       (Boolean(teacher.source_photo_url) || sourceLocked || candidates.length > 0),
-    can_generate_videos: imageReady && videoCounts.total > 0,
+    can_generate_videos: !noPhoneWithPhoto && imageReady && videoCounts.total > 0,
   };
 };

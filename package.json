@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "test:production": "tsx scripts/videoIdentity.selftest.ts && tsx scripts/productionValidity.selftest.ts && tsx scripts/nominationVideoWhatsApp.selftest.ts",
     "generate:teacher-videos": "tsx scripts/generateAllStudentVideos.ts"
   },
   "dependencies": {

@@ -9,6 +9,7 @@ import {
   RETRY_EXCLUSION_REASON,
 } from "./whatsappRetryRules";
 import { maybeSettleRetryGroup, scheduleRetryPromotion } from "./whatsappSend";
+import { isNominationVideoWhatsAppKind } from "./nominationVideoWhatsApp";
 
 const SUCCESS_RANK: Record<string, number> = {
   queued: 1,
@@ -216,7 +217,7 @@ export const handleDeliveryEvent = async (root: Record<string, unknown>) => {
     set.errorMessage = (errorReason || errorCode || "Delivery failed").slice(0, 2000);
     set.webhookErrorCode = errorCode.slice(0, 32) || null;
     set.webhookErrorReason = errorReason.slice(0, 2000) || null;
-    set.retryEligible = classification.retryable;
+    set.retryEligible = isNominationVideoWhatsAppKind(doc.messageKind) ? false : classification.retryable;
     set.terminalFailureKind = classification.terminalFailureKind;
     set.retryExclusionReason = classification.retryable ? null : classification.exclusionReason;
     set.retryExclusionAt = classification.retryable ? null : new Date();
@@ -224,6 +225,9 @@ export const handleDeliveryEvent = async (root: Record<string, unknown>) => {
       set.retryExclusionMeta = { note: classification.metaNote };
     }
     await WhatsAppMessageEvent.updateOne({ _id: doc._id }, { $set: set });
+    if (isNominationVideoWhatsAppKind(doc.messageKind)) {
+      return { received: true, status: newStatus };
+    }
     const attemptNumber = Number(doc.attemptNumber || 1);
     const canRetry =
       Boolean(doc.retryGroupId) &&

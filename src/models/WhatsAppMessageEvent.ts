@@ -88,6 +88,19 @@ const whatsAppMessageEventSchema = new Schema({
     note: { type: String, trim: true, maxlength: 200, default: null },
   },
   headerImageUrl: { type: String, trim: true, maxlength: 1024, default: null },
+  headerVideoUrl: { type: String, trim: true, maxlength: 2048, default: null },
+  campaignId: { type: String, trim: true, maxlength: 64, default: null, index: true },
+  nominationId: { type: String, trim: true, maxlength: 64, default: null, index: true },
+  nominationVideoId: { type: String, trim: true, maxlength: 64, default: null },
+  nominationKind: {
+    type: String,
+    enum: ["student", "teacher", "colleague", null],
+    default: null,
+    index: true,
+  },
+  teacherName: { type: String, trim: true, maxlength: 200, default: null },
+  videoUrl: { type: String, trim: true, maxlength: 2048, default: null },
+  retryCount: { type: Number, default: 0, min: 0 },
   sentAt: { type: Date, default: null },
   deliveredAt: { type: Date, default: null },
   readAt: { type: Date, default: null },
@@ -108,6 +121,22 @@ whatsAppMessageEventSchema.index({ retryGroupId: 1, attemptNumber: 1 });
 whatsAppMessageEventSchema.index(
   { retryGroupId: 1, phone: 1, attemptNumber: 1 },
   { unique: true, partialFilterExpression: { retryGroupId: { $exists: true, $type: "objectId" } } }
+);
+whatsAppMessageEventSchema.index(
+  { nominationVideoId: 1 },
+  { unique: true, partialFilterExpression: { nominationVideoId: { $type: "string" } } }
+);
+whatsAppMessageEventSchema.index(
+  { nominationId: 1, nominationVideoId: 1 },
+  { unique: true, partialFilterExpression: { nominationVideoId: { $type: "string" } } }
+);
+whatsAppMessageEventSchema.index(
+  { phone: 1, nominationKind: 1 },
+  {
+    unique: true,
+    name: "phone_nominationKind_unique",
+    partialFilterExpression: { nominationKind: { $in: ["student", "teacher", "colleague"] } },
+  }
 );
 
 export type WhatsAppMessageEventDoc = {
@@ -138,6 +167,14 @@ export type WhatsAppMessageEventDoc = {
   retryExclusionReason: string | null;
   retryExclusionAt: Date | null;
   headerImageUrl: string | null;
+  headerVideoUrl: string | null;
+  campaignId: string | null;
+  nominationId: string | null;
+  nominationVideoId: string | null;
+  nominationKind: "student" | "teacher" | "colleague" | null;
+  teacherName: string | null;
+  videoUrl: string | null;
+  retryCount: number;
   sentAt: Date | null;
   deliveredAt: Date | null;
   readAt: Date | null;

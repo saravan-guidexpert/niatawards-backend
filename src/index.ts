@@ -75,7 +75,7 @@ app.use(
     methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 // Delivery reports arrive as form-encoded or plain-text bodies, not JSON.
 app.use(express.urlencoded({ extended: false }));
 app.use(express.text({ type: ["text/plain", "text/*"] }));

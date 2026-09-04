@@ -8,6 +8,7 @@ import {
   TEACHER_NOMINATION_TEMPLATE,
   videoTemplateOf,
   type NominationKind,
+  type PhotoState,
   type VideoTemplateVariant,
 } from "./nominationKind";
 
@@ -29,6 +30,10 @@ export type VideoIdentityRecord = {
   video_render_id?: unknown;
   video_template?: unknown;
   nomination_kind?: unknown;
+  photo_used?: unknown;
+  video_category?: unknown;
+  audio_filename?: unknown;
+  production_photo_fallback?: unknown;
 };
 
 const hasPlayableUrl = (url: unknown) => /^https?:\/\//i.test(String(url || "").trim());
@@ -105,6 +110,48 @@ export const videoSatisfiesNomination = (opts: {
   expectedKind: NominationKind;
   urlOwners?: Map<string, Array<{ nomination_id: string; kind: NominationKind }>>;
 }) => isPlayableGeneratedVideo(opts.video) && !videoIdentityMismatch(opts);
+
+/**
+ * Photo state is taken from the nomination source photo, never from TeacherPortrait.
+ * A with-photo nomination playing a without-photo MP4 is INVALID even if identity matches.
+ */
+export const videoMatchesPhotoState = (
+  video: VideoIdentityRecord | null | undefined,
+  expectedPhoto: PhotoState
+) => {
+  const fallbackWithoutPhoto =
+    video?.production_photo_fallback === true &&
+    video?.photo_used !== true &&
+    video?.video_category !== "with_photo";
+  if (fallbackWithoutPhoto) return true;
+  if (expectedPhoto === "with_photo") {
+    return video?.photo_used === true && video?.video_category === "with_photo";
+  }
+  return video?.photo_used !== true && video?.video_category !== "with_photo";
+};
+
+export type ProductionValidity = "VALID" | "INVALID" | "MISSING";
+
+export const videoProductionValidity = (opts: {
+  video: VideoIdentityRecord | null | undefined;
+  nominationId: string;
+  expectedKind: NominationKind;
+  expectedPhoto: PhotoState;
+  urlOwners?: Map<string, Array<{ nomination_id: string; kind: NominationKind }>>;
+}): ProductionValidity => {
+  if (!isPlayableGeneratedVideo(opts.video)) return "MISSING";
+  if (videoIdentityMismatch(opts)) return "INVALID";
+  if (!videoMatchesPhotoState(opts.video, opts.expectedPhoto)) return "INVALID";
+  return "VALID";
+};
+
+export const videoProductionValid = (opts: {
+  video: VideoIdentityRecord | null | undefined;
+  nominationId: string;
+  expectedKind: NominationKind;
+  expectedPhoto: PhotoState;
+  urlOwners?: Map<string, Array<{ nomination_id: string; kind: NominationKind }>>;
+}) => videoProductionValidity(opts) === "VALID";
 
 export const buildVideoUrlOwners = (
   rows: Array<{ nomination_id: string; kind: NominationKind; video_url?: unknown; generation_status?: unknown }>

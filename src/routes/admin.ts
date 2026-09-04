@@ -31,6 +31,7 @@ import {
   slugifyDigitalField,
 } from "../lib/digitalCampaign";
 import whatsappOpsAdminRoutes from "./whatsappOpsAdmin";
+import teacherVideoMessagingAdminRoutes from "./teacherVideoMessagingAdmin";
 import videoReviewAdminRoutes from "./videoReviewAdmin";
 import teacherPortraitsAdminRoutes from "./teacherPortraitsAdmin";
 import videoGenerationAdminRoutes from "./videoGenerationAdmin";
@@ -109,6 +110,7 @@ router.post("/login", async (req: Request, res: Response) => {
 router.use(adminAuth);
 
 router.use("/whatsapp-ops", requirePermission("whatsapp"), whatsappOpsAdminRoutes);
+router.use("/teacher-video-messaging", requirePermission("whatsapp"), teacherVideoMessagingAdminRoutes);
 router.use("/video-reviews", requirePermission("nominations"), videoReviewAdminRoutes);
 router.use("/teacher-portraits", requirePermission("nominations"), teacherPortraitsAdminRoutes);
 router.use("/video-generation", requirePermission("nominations"), videoGenerationAdminRoutes);

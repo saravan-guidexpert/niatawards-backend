@@ -8,8 +8,10 @@ import { hasSourcePhoto, intendedVideoCategory } from "../lib/sourcePhoto";
 import { isSubmittedNomination, nominationKind, photoStateOf, teacherDisplayName, exactCategoryOf, IMAGE_MANAGEMENT_CATEGORIES, usableTeacherPhone, videoTemplateOf } from "../lib/nominationKind";
 import {
   videoIdentityMismatch,
+  videoProductionValid,
   videoSatisfiesNomination,
 } from "../lib/videoIdentity";
+import { activeLiveStatuses } from "../lib/videoGenerationWorker";
 
 const router = Router();
 
@@ -32,7 +34,8 @@ const hasPlayableVideo = (url: unknown) => {
 const toReviewItem = (
   nomination: Record<string, unknown>,
   video: Record<string, unknown> | null,
-  teacherPortrait: Record<string, unknown> | null
+  teacherPortrait: Record<string, unknown> | null,
+  liveStatus?: "QUEUED" | "PROCESSING" | null
 ) => {
   const eligible = isSubmittedNomination(nomination);
   const photoProvided = hasSourcePhoto(nomination.photo_url);
@@ -47,28 +50,39 @@ const toReviewItem = (
         expectedKind: kind,
       })
     : null;
-  const satisfies = videoSatisfiesNomination({
+  const identityOk = videoSatisfiesNomination({
     video,
     nominationId,
     expectedKind: kind,
   });
-  const videoUrl = satisfies ? video?.video_url ?? null : null;
+  const productionValid = videoProductionValid({
+    video,
+    nominationId,
+    expectedKind: kind,
+    expectedPhoto: photoState,
+  });
+  const videoUrl = identityOk ? video?.video_url ?? null : null;
+  const live = liveStatus === "QUEUED" || liveStatus === "PROCESSING" ? liveStatus : null;
   const generationStatus = eligible
-    ? satisfies
+    ? productionValid
       ? String(video?.generation_status || "pending")
       : String(video?.generation_status || "") === "failed"
         ? "failed"
-        : "pending"
+        : live === "QUEUED"
+          ? "queued"
+          : live === "PROCESSING"
+            ? "processing"
+            : "pending"
     : "not_eligible";
-  const renderedCategory = satisfies &&
-    (video?.video_category === "with_photo" || video?.video_category === "without_photo")
+  const renderedCategory =
+    identityOk && (video?.video_category === "with_photo" || video?.video_category === "without_photo")
       ? String(video.video_category)
       : null;
-  const photoUsedInVideo = Boolean(satisfies && video?.photo_used);
-  const categoryMismatch = satisfies && photoProvided && (renderedCategory === "without_photo" || video?.photo_used === false);
+  const photoUsedInVideo = Boolean(identityOk && video?.photo_used);
+  const categoryMismatch = identityOk && photoProvided && (renderedCategory === "without_photo" || video?.photo_used === false);
 
   const reviewStatus = eligible
-    ? satisfies
+    ? productionValid
       ? String(video?.review_status || "none")
       : "none"
     : "not_eligible";
@@ -102,7 +116,7 @@ const toReviewItem = (
     nomination_kind: kind,
     photo_state: photoState,
     exact_category: exactCategoryOf(kind, photoState),
-    video_template: satisfies ? videoTemplateOf(kind) : video?.video_template ? String(video.video_template) : null,
+    video_template: productionValid ? videoTemplateOf(kind) : video?.video_template ? String(video.video_template) : null,
     identity_mismatch: Boolean(identityMismatch),
     identity_mismatch_reason: identityMismatch,
     student_class: nomination.student_class || null,
@@ -111,16 +125,16 @@ const toReviewItem = (
     generation_status: generationStatus,
     review_status: reviewStatus,
     video_url: hasPlayableVideo(videoUrl) ? videoUrl : null,
-    video_render_id: satisfies && video?.video_render_id ? String(video.video_render_id) : null,
-    category_icon_id: satisfies && video?.category_icon_id ? String(video.category_icon_id) : null,
-    category_icon_filename: satisfies && video?.category_icon_filename ? String(video.category_icon_filename) : null,
-    audio_filename: satisfies && video?.audio_filename ? String(video.audio_filename) : null,
-    generated_at: satisfies ? video?.generated_at || null : null,
-    approved_at: satisfies ? video?.approved_at || null : null,
-    rejected_at: satisfies ? video?.rejected_at || null : null,
-    rejection_reason: satisfies ? video?.rejection_reason || null : null,
-    ready_for_message: Boolean(satisfies && video?.ready_for_message),
-    regenerate_available: false,
+    video_render_id: identityOk && video?.video_render_id ? String(video.video_render_id) : null,
+    category_icon_id: identityOk && video?.category_icon_id ? String(video.category_icon_id) : null,
+    category_icon_filename: identityOk && video?.category_icon_filename ? String(video.category_icon_filename) : null,
+    audio_filename: identityOk && video?.audio_filename ? String(video.audio_filename) : null,
+    generated_at: identityOk ? video?.generated_at || null : null,
+    approved_at: productionValid ? video?.approved_at || null : null,
+    rejected_at: productionValid ? video?.rejected_at || null : null,
+    rejection_reason: productionValid ? video?.rejection_reason || null : null,
+    ready_for_message: Boolean(productionValid && video?.ready_for_message),
+    regenerate_available: Boolean(eligible),
     portrait_status: !photoProvided
       ? "NOT_PROVIDED"
       : resolved.usable
@@ -159,6 +173,7 @@ router.get("/", async (_req: Request, res: Response) => {
     ];
     const videos = await NominationVideo.find({ nomination_id: { $in: ids } });
     const portraits = await TeacherPortrait.find({ teacher_phone: { $in: phones } });
+    const live = await activeLiveStatuses();
     const videoByNomination = new Map(
       videos.map((v) => [v.nomination_id, v.toJSON() as Record<string, unknown>])
     );
@@ -172,7 +187,8 @@ router.get("/", async (_req: Request, res: Response) => {
         toReviewItem(
           n,
           videoByNomination.get(String(n.id)) || null,
-          portraitByPhone.get(phone10(n.phone)) || null
+          portraitByPhone.get(phone10(n.phone)) || null,
+          live.get(String(n.id)) || null
         )
       );
 
@@ -204,7 +220,8 @@ router.get("/", async (_req: Request, res: Response) => {
         nominations: rows.length,
         unique_teachers: phones.size,
         videos_generated: rows.filter((i) => i.generation_status === "generated" && i.video_url).length,
-        videos_queued: rows.filter((i) => i.generation_status === "pending").length,
+        videos_queued: rows.filter((i) => i.generation_status === "queued" || i.generation_status === "pending").length,
+        videos_processing: rows.filter((i) => i.generation_status === "processing").length,
         videos_failed: rows.filter((i) => i.generation_status === "failed").length,
         identity_mismatches: rows.filter((i) => i.identity_mismatch).length,
       };
@@ -230,10 +247,11 @@ router.patch("/:nominationId", async (req: Request, res: Response) => {
 
     let video = await NominationVideo.findOne({ nomination_id: nominationId });
     const kind = nominationKind(nomination);
-    const satisfies = videoSatisfiesNomination({
+    const satisfies = videoProductionValid({
       video: video ? (video.toJSON() as Record<string, unknown>) : null,
       nominationId,
       expectedKind: kind,
+      expectedPhoto: photoStateOf(nomination.photo_url),
     });
     const playable = satisfies && hasPlayableVideo(video?.video_url);
 

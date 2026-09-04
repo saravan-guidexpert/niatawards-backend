@@ -12,6 +12,7 @@ import {
   type PortraitAdminStatus,
 } from "../lib/nominationKind";
 import {
+  catalogLookupKey,
   emptyStatusCounts,
   emptyVideoCounts,
   emptyVideoTeacherCounts,
@@ -20,6 +21,7 @@ import {
   teacherListItem,
 } from "../lib/teacherPortraitCatalog";
 import { loadAdminTeacherCatalog } from "../lib/loadTeacherCatalog";
+import { createPortraitGenerationJob, jobPublicView } from "../lib/videoGenerationWorker";
 
 const router = Router();
 
@@ -53,6 +55,7 @@ router.get("/summary", async (_req: Request, res: Response) => {
         videos.pending += item.videos.pending;
         videos.processing += item.videos.processing;
         videos.failed += item.videos.failed;
+        videos.blocked += item.videos.blocked;
         videos.total += item.videos.total;
         const remaining = Math.max(0, item.videos.total - item.videos.generated);
         if (item.videos.total > 0 && remaining === 0) videoTeachers.generated += 1;
@@ -67,6 +70,7 @@ router.get("/summary", async (_req: Request, res: Response) => {
         }
         if (item.videos.processing > 0) videoTeachers.processing += 1;
         if (item.videos.failed > 0) videoTeachers.failed += 1;
+        if (item.videos.blocked > 0) videoTeachers.blocked += 1;
       }
       return {
         id: cat.id,
@@ -74,7 +78,7 @@ router.get("/summary", async (_req: Request, res: Response) => {
         photo: cat.photo,
         group: cat.group,
         photoLabel: cat.photoLabel,
-        unique_teachers: teachers.length,
+        unique_teachers: teachers.filter((t) => !t.missing_phone).length,
         nominations,
         status,
         videos: {
@@ -82,6 +86,7 @@ router.get("/summary", async (_req: Request, res: Response) => {
           not_generated: Math.max(0, videos.total - videos.generated),
           not_generated_finalized: notGeneratedFinalizedNoms,
           not_generated_no_photo: notGeneratedNoPhotoNoms,
+          blocked: videos.blocked,
           teachers: videoTeachers,
         },
         images_finalized: cat.photo === "with_photo" ? status.GENERATED : teachers.length,
@@ -89,6 +94,7 @@ router.get("/summary", async (_req: Request, res: Response) => {
           cat.photo === "with_photo"
             ? status.NOT_GENERATED + status.GENERATING + status.NEEDS_REVIEW + status.FAILED
             : 0,
+        images_needs_verification: cat.photo === "with_photo" ? status.NEEDS_VERIFICATION : 0,
       };
     });
     const kinds = NOMINATION_KINDS.map((kind) => {
@@ -97,7 +103,7 @@ router.get("/summary", async (_req: Request, res: Response) => {
       const phones = new Set<string>();
       for (const cat of meta) {
         for (const teacher of buckets.get(cat.id)?.values() || []) {
-          phones.add(teacher.phone);
+          if (!teacher.missing_phone) phones.add(teacher.phone);
         }
       }
       const withPhoto = catRows.find((row) => row.photo === "with_photo");
@@ -113,10 +119,12 @@ router.get("/summary", async (_req: Request, res: Response) => {
         without_photo_nominations: withoutPhoto?.nominations ?? 0,
         images_finalized: withPhoto?.images_finalized ?? 0,
         images_missing: withPhoto?.images_pending ?? 0,
+        images_needs_verification: withPhoto?.images_needs_verification ?? 0,
         videos_generated: catRows.reduce((sum, row) => sum + (row.videos?.generated || 0), 0),
         videos_queued: catRows.reduce((sum, row) => sum + (row.videos?.pending || 0), 0),
         videos_processing: catRows.reduce((sum, row) => sum + (row.videos?.processing || 0), 0),
         videos_failed: catRows.reduce((sum, row) => sum + (row.videos?.failed || 0), 0),
+        videos_blocked: catRows.reduce((sum, row) => sum + (row.videos?.blocked || 0), 0),
       };
     });
     res.json({ categories, kinds });
@@ -147,7 +155,10 @@ router.get("/", async (req: Request, res: Response) => {
     if (videoStatus) items = items.filter((row) => matchesVideoAdminFilter(row, videoStatus));
     if (q) {
       items = items.filter(
-        (row) => row.name.toLowerCase().includes(q) || row.phone.includes(q)
+        (row) =>
+          row.name.toLowerCase().includes(q) ||
+          row.phone.includes(q) ||
+          row.nomination_ids.some((id) => id.toLowerCase().includes(q))
       );
     }
     items.sort((a, b) => a.name.localeCompare(b.name) || a.phone.localeCompare(b.phone));
@@ -155,7 +166,12 @@ router.get("/", async (req: Request, res: Response) => {
     if (idsOnly) {
       res.json({
         phones: items.map((row) => row.phone),
-        teachers: items.map((row) => ({ phone: row.phone, name: row.name })),
+        teachers: items.map((row) => ({
+          phone: row.phone,
+          name: row.name,
+          nomination_ids: row.nomination_ids,
+          missing_phone: Boolean(row.missing_phone),
+        })),
         total: items.length,
       });
       return;
@@ -199,6 +215,75 @@ router.post("/generate", async (req: Request, res: Response) => {
     await runGenerate(req, res, false);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to generate portrait";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post("/jobs", async (req: Request, res: Response) => {
+  try {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const kind = isKind(body.kind) ? body.kind : null;
+    const photo = isPhoto(body.photo) ? body.photo : null;
+    if (!kind || !photo) {
+      res.status(400).json({ error: "kind and photo are required" });
+      return;
+    }
+    if (photo !== "with_photo") {
+      res.status(400).json({ error: "Portrait jobs are only for with-photo nominations" });
+      return;
+    }
+    const raw = Array.isArray(body.phones) ? body.phones : body.phone ? [body.phone] : [];
+    const phones = [...new Set(raw.map((value) => catalogLookupKey(value)).filter(Boolean))];
+    if (!phones.length) {
+      res.status(400).json({ error: "Select one or more teachers" });
+      return;
+    }
+    const regenerate = Boolean(body.regenerate);
+    const { buckets, portraitsMap, videosMap, live, nomsByPhone } = await loadAdminTeacherCatalog();
+    const categoryId = categoryIdOf(kind, photo);
+    const bucket = buckets.get(categoryId) || new Map();
+    const teachers = phones
+      .map((phone) => bucket.get(phone))
+      .filter((row): row is NonNullable<typeof row> => Boolean(row));
+    const queued = teachers.flatMap((teacher) => {
+      const item = teacherListItem(
+        teacher,
+        portraitsMap.get(teacher.phone),
+        videosMap,
+        live,
+        nomsByPhone.get(teacher.phone)
+      );
+      if (item.missing_phone) return [];
+      if (!regenerate && item.portrait_status === "GENERATED") return [];
+      if (!regenerate && item.portrait_status === "NEEDS_VERIFICATION") return [];
+      if (!regenerate && !item.can_generate_image && item.portrait_status !== "FAILED") return [];
+      return [
+        {
+          phone: teacher.phone,
+          name: teacher.name,
+          nomination_id: teacher.nomination_ids[0] || "",
+        },
+      ];
+    });
+    if (!queued.length) {
+      res.status(400).json({ error: "No teachers need portrait generation" });
+      return;
+    }
+    const createdBy = req.admin?.username || req.admin?.id || null;
+    const job = await createPortraitGenerationJob({
+      mode: regenerate ? "regenerate" : "generate",
+      category_id: categoryId,
+      kind,
+      photo,
+      teachers: queued,
+      created_by: createdBy,
+    });
+    res.status(202).json({
+      job: jobPublicView(job.toObject()),
+      queued_teachers: queued.length,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to start portrait job";
     res.status(500).json({ error: message });
   }
 });

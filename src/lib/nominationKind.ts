@@ -15,6 +15,7 @@ export const PORTRAIT_ADMIN_STATUSES = [
   "NOT_GENERATED",
   "GENERATING",
   "GENERATED",
+  "NEEDS_VERIFICATION",
   "NEEDS_REVIEW",
   "FAILED",
   "NO_PHOTO",
@@ -31,6 +32,9 @@ export const IMAGE_MANAGEMENT_CATEGORIES = [
 ] as const;
 
 export type ImageManagementCategoryId = (typeof IMAGE_MANAGEMENT_CATEGORIES)[number]["id"];
+
+/** One persistent job covering all three WITHOUT-PHOTO presentation categories. */
+export const WITHOUT_PHOTO_BULK_CATEGORY_ID = "without_photo_all";
 
 const text = (value: unknown) => String(value ?? "").trim();
 
@@ -101,6 +105,20 @@ export const isFinalizedPortrait = (portrait: {
   String(portrait?.portrait_status || "") === "GENERATED" &&
   Boolean(String(portrait?.cropped_cloudinary_url || "").trim());
 
+/** Production crop is either `*-top60.png` or `{phone}.png` with crop_version top60_y1372. */
+export const VERIFIED_CROP_VERSION = "top60_y1372";
+
+export const isVerifiedProductionCrop = (portrait: {
+  portrait_status?: unknown;
+  cropped_cloudinary_url?: unknown;
+  crop_version?: unknown;
+} | null | undefined) => {
+  if (!isFinalizedPortrait(portrait)) return false;
+  const url = String(portrait?.cropped_cloudinary_url || "").trim().toLowerCase();
+  if (url.includes("-top60") || url.includes("top60_y1372")) return true;
+  return String(portrait?.crop_version || "").trim() === VERIFIED_CROP_VERSION;
+};
+
 /** A claim older than this belongs to a run that died; it is no longer generating. */
 export const STALE_PORTRAIT_PROCESSING_MS = 8 * 60 * 1000;
 
@@ -114,6 +132,7 @@ export const mapPortraitAdminStatus = (
   portrait: {
     portrait_status?: unknown;
     cropped_cloudinary_url?: unknown;
+    crop_version?: unknown;
     source_nomination_id?: unknown;
     portrait_error?: unknown;
     updated_at?: unknown;
@@ -128,7 +147,9 @@ export const mapPortraitAdminStatus = (
     return isStalePortraitClaim(portrait.updated_at) ? "NOT_GENERATED" : "GENERATING";
   }
   if (status === "FAILED") return "FAILED";
-  if (isFinalizedPortrait(portrait)) return "GENERATED";
+  if (isFinalizedPortrait(portrait)) {
+    return isVerifiedProductionCrop(portrait) ? "GENERATED" : "NEEDS_VERIFICATION";
+  }
   if (status === "NEEDS_REVIEW") {
     if (String(portrait.source_nomination_id || "").trim()) {
       return String(portrait.portrait_error || "").trim() ? "FAILED" : "NOT_GENERATED";
