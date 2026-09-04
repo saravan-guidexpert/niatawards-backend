@@ -21,6 +21,7 @@ import cronRoutes from "./routes/cron";
 import nominationVideoRoutes from "./routes/nominationVideos";
 import { seedSuperAdmin } from "./lib/seedSuperAdmin";
 import { startVideoGenerationWorker } from "./lib/videoGenerationWorker";
+import { resumeQueuedNominationVideoWhatsAppJobs } from "./lib/nominationVideoWhatsApp";
 import { Nomination } from "./models/Nomination";
 import { OtpVerification } from "./models/OtpVerification";
 
@@ -119,6 +120,9 @@ const start = async () => {
     console.log(`OpenAI API key: ${firstEnv("OPENAI_API_KEY", "LLM_API_KEY") ? "loaded" : "MISSING"}`);
     const bgRemove = findBgRemoveRoot();
     console.log(bgRemove ? `bg-remove: ${bgRemove}` : "bg-remove: not on this host (video queue only)");
+    void resumeQueuedNominationVideoWhatsAppJobs().catch((err) => {
+      console.error("[WhatsApp] failed to resume queued nomination videos", err);
+    });
   });
 };
 

@@ -653,6 +653,35 @@ export const queueNominationVideoWhatsAppJobs = (eventIds: string[]) => {
   pumpVideoSendQueue();
 };
 
+export const findQueuedNominationVideoWhatsAppEventId = async (nominationVideoId: string) => {
+  const event = await WhatsAppMessageEvent.findOne({
+    nominationVideoId: text(nominationVideoId),
+    status: "queued",
+    messageKind: { $in: NOMINATION_VIDEO_WHATSAPP_KINDS },
+    gupshupMessageId: null,
+  })
+    .select("_id")
+    .lean();
+  return event ? String(event._id) : null;
+};
+
+export const resumeQueuedNominationVideoWhatsAppJobs = async (eventIds?: string[]) => {
+  const ids = (eventIds || []).map((id) => String(id || "").trim()).filter((id) => Types.ObjectId.isValid(id));
+  const docs = await WhatsAppMessageEvent.find({
+    status: "queued",
+    messageKind: { $in: NOMINATION_VIDEO_WHATSAPP_KINDS },
+    gupshupMessageId: null,
+    ...(ids.length ? { _id: { $in: ids } } : {}),
+  })
+    .select("_id")
+    .lean();
+  const queuedIds = docs.map((doc) => String(doc._id));
+  if (!queuedIds.length) return 0;
+  console.log(`[WhatsApp] resuming ${queuedIds.length} queued nomination video message(s)`);
+  queueNominationVideoWhatsAppJobs(queuedIds);
+  return queuedIds.length;
+};
+
 const markQueuedEventFailed = async (eventId: string, error: string) => {
   if (!Types.ObjectId.isValid(eventId)) return;
   await WhatsAppMessageEvent.updateOne(

@@ -317,6 +317,7 @@ export const retryFailedVideoJob = async (jobId: string, createdBy?: string | nu
     created_by: createdBy || source.created_by,
     job_type: (source.job_type as VideoJobType) || "video",
     include_portraits: Boolean(source.include_portraits) || source.job_type === "image_plus_video",
+    force_without_photo: Boolean(source.force_without_photo),
     planned: failed.map((row) => ({
       nomination_id: row.nomination_id,
       teacher_phone: row.teacher_phone,

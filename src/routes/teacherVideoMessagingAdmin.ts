@@ -13,7 +13,9 @@ import {
 } from "../lib/teacherVideoMessaging";
 import {
   enqueueNominationVideoWhatsApp,
+  findQueuedNominationVideoWhatsAppEventId,
   queueNominationVideoWhatsAppJob,
+  resumeQueuedNominationVideoWhatsAppJobs,
 } from "../lib/nominationVideoWhatsApp";
 import { NOMINATION_KINDS, type NominationKind } from "../lib/nominationKind";
 
@@ -151,6 +153,20 @@ router.post("/send", async (req: Request, res: Response) => {
     const nominationVideoId = String(req.body?.nominationVideoId || "").trim();
     if (!nominationVideoId) {
       res.status(400).json({ error: "nominationVideoId is required" });
+      return;
+    }
+    if (req.body?.resume) {
+      const eventId = await findQueuedNominationVideoWhatsAppEventId(nominationVideoId);
+      if (!eventId) {
+        res.status(400).json({ error: "No queued message to resume" });
+        return;
+      }
+      const resumed = await resumeQueuedNominationVideoWhatsAppJobs([eventId]);
+      if (!resumed) {
+        res.status(400).json({ error: "No queued message to resume" });
+        return;
+      }
+      res.json({ ok: true, queued: true, eventId, eventIds: [eventId], status: "queued" });
       return;
     }
     const queued = await enqueueNominationVideoWhatsApp({

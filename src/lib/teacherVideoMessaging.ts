@@ -278,6 +278,7 @@ export type TeacherVideoMessageRow = {
   readAt: string | null;
   canSend: boolean;
   canRetry: boolean;
+  canResume: boolean;
   videoCount: number;
   messagingKey: string;
 };
@@ -333,6 +334,7 @@ const toRow = (
     readAt: delivery?.readAt ? new Date(String(delivery.readAt)).toISOString() : null,
     canSend: Boolean(teacherPhone) && (messageStatus === "ready" || (teacherPhone === VIDEO_MESSAGING_TEST_PHONE && messageStatus !== "queued")),
     canRetry: messageStatus === "failed",
+    canResume: messageStatus === "queued",
     videoCount: Math.max(1, Number(videoCount) || 1),
     messagingKey: teacherKindKey(teacherPhone, kind),
   };
