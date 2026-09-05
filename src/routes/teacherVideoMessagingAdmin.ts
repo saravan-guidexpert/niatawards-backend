@@ -8,6 +8,8 @@ import {
   progressForEventIds,
   queueTeacherVideoMatching,
   queueTeacherVideoMessages,
+  resumeTeacherVideoMatching,
+  resumeTeacherVideoMessages,
   summarizeTeacherVideoMessages,
   type MessagingRowStatus,
 } from "../lib/teacherVideoMessaging";
@@ -215,6 +217,22 @@ router.post("/queue", async (req: Request, res: Response) => {
     res.json({ ok: true, ...await queueTeacherVideoMessages(ids, false) });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to queue messages";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post("/resume", async (req: Request, res: Response) => {
+  try {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const matching = matchingFromBody(body);
+    if (matching) {
+      res.json({ ok: true, ...await resumeTeacherVideoMatching(matching) });
+      return;
+    }
+    const ids = idsFromBody(body);
+    res.json({ ok: true, ...await resumeTeacherVideoMessages(ids.length ? ids : undefined) });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to resume queued messages";
     res.status(500).json({ error: message });
   }
 });

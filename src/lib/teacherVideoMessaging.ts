@@ -20,8 +20,11 @@ export const MESSAGING_KIND_LABEL: Record<NominationKind, string> = {
   colleague: "Teacher Nominated Other Teacher",
 };
 import { videoProductionValid } from "./videoIdentity";
+import { randomUUID } from "crypto";
 import {
   bulkEnqueueNominationVideoWhatsApp,
+  NOMINATION_VIDEO_WHATSAPP_KINDS,
+  resumeQueuedNominationVideoWhatsAppJobs,
   teacherKindKey,
   templateEnvKeyForNominationKind,
   VIDEO_MESSAGING_TEST_PHONE,
@@ -394,6 +397,7 @@ export const listTeacherVideoMessageIds = async (opts: Omit<ListOpts, "page" | "
   const ids: string[] = [];
   const failedIds: string[] = [];
   const readyIds: string[] = [];
+  const queuedIds: string[] = [];
   const recipients = new Set<string>();
   const byKind = { student: 0, teacher: 0, colleague: 0 };
   const byPhoto = { with_photo: 0, without_photo: 0 };
@@ -414,14 +418,16 @@ export const listTeacherVideoMessageIds = async (opts: Omit<ListOpts, "page" | "
     if (row.isTest) testCount += 1;
     if (row.canRetry) failedIds.push(row.nominationVideoId);
     if (row.canSend) readyIds.push(row.nominationVideoId);
+    if (row.canResume) queuedIds.push(row.nominationVideoId);
   }
 
-  const alreadySent = Math.max(0, ids.length - readyIds.length - failedIds.length);
+  const alreadySent = Math.max(0, ids.length - readyIds.length - failedIds.length - queuedIds.length);
   return {
     total: ids.length,
     ids,
     failedIds,
     readyIds,
+    queuedIds,
     testCount,
     recipientCount: recipients.size,
     alreadySent,
@@ -591,6 +597,57 @@ export const queueTeacherVideoMatching = async (opts: Omit<ListOpts, "page" | "l
   const listed = await listTeacherVideoMessageIds(opts);
   const ids = allowRetry ? listed.failedIds : listed.readyIds;
   return queueTeacherVideoMessages(ids, allowRetry);
+};
+
+export const resumeTeacherVideoMessages = async (nominationVideoIds?: string[]) => {
+  const scoped = nominationVideoIds !== undefined;
+  const ids = [...new Set((nominationVideoIds || []).map((id) => text(id)).filter(Boolean))].slice(0, MAX_BULK_IDS);
+  if (scoped && !ids.length) {
+    return {
+      queued: 0,
+      skipped: 0,
+      eventIds: [] as string[],
+      campaignId: randomUUID(),
+      results: [] as Array<{
+        nominationVideoId: string;
+        ok: boolean;
+        queued?: boolean;
+        duplicate?: boolean;
+        status: string;
+        eventId: string | null;
+        error?: string;
+      }>,
+    };
+  }
+  const query: Record<string, unknown> = {
+    status: "queued",
+    messageKind: { $in: NOMINATION_VIDEO_WHATSAPP_KINDS },
+    gupshupMessageId: null,
+  };
+  if (ids.length) query.nominationVideoId = { $in: ids };
+  const docs = await WhatsAppMessageEvent.find(query).select("_id").lean();
+  const eventIds = docs.map((doc) => String(doc._id));
+  const queued = eventIds.length ? await resumeQueuedNominationVideoWhatsAppJobs(eventIds) : 0;
+  return {
+    queued,
+    skipped: 0,
+    eventIds,
+    campaignId: randomUUID(),
+    results: [] as Array<{
+      nominationVideoId: string;
+      ok: boolean;
+      queued?: boolean;
+      duplicate?: boolean;
+      status: string;
+      eventId: string | null;
+      error?: string;
+    }>,
+  };
+};
+
+export const resumeTeacherVideoMatching = async (opts: Omit<ListOpts, "page" | "limit">) => {
+  const listed = await listTeacherVideoMessageIds({ ...opts, status: "queued" });
+  return resumeTeacherVideoMessages(listed.queuedIds.length ? listed.queuedIds : listed.ids);
 };
 
 export const progressForEventIds = async (eventIds: string[], campaignId?: string) => {
