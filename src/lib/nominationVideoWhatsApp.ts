@@ -740,24 +740,12 @@ const isNonRetryableVideoFailure = (doc: {
   });
 };
 
-const outstandingVideoRetryQuery = () => {
-  const staleBefore = new Date(Date.now() - 30 * 60 * 1000);
-  return {
-    messageKind: { $in: NOMINATION_VIDEO_WHATSAPP_KINDS },
-    retryCount: { $lt: VIDEO_RETRY_CAP },
-    retryExclusionReason: { $nin: [RETRY_EXCLUSION_REASON.permanentFailure] },
-    $or: [
-      { status: { $in: ["failed", "retry_exhausted"] } },
-      {
-        status: { $in: ["submitted", "sent"] },
-        $or: [
-          { providerAcceptedAt: { $lte: staleBefore } },
-          { providerAcceptedAt: null, updatedAt: { $lte: staleBefore } },
-        ],
-      },
-    ],
-  };
-};
+const outstandingVideoRetryQuery = () => ({
+  status: { $in: ["failed", "retry_exhausted"] },
+  messageKind: { $in: NOMINATION_VIDEO_WHATSAPP_KINDS },
+  retryCount: { $lt: VIDEO_RETRY_CAP },
+  retryExclusionReason: { $nin: [RETRY_EXCLUSION_REASON.permanentFailure] },
+});
 
 export const retryFailedNominationVideoWhatsAppJobs = async (limit = VIDEO_DRAIN_LIMIT) => {
   const docs = await WhatsAppMessageEvent.find(outstandingVideoRetryQuery())
