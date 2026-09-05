@@ -338,7 +338,7 @@ const toRow = (
     deliveredAt: delivery?.deliveredAt ? new Date(String(delivery.deliveredAt)).toISOString() : null,
     readAt: delivery?.readAt ? new Date(String(delivery.readAt)).toISOString() : null,
     canSend: Boolean(teacherPhone) && (messageStatus === "ready" || (teacherPhone === VIDEO_MESSAGING_TEST_PHONE && messageStatus !== "queued")),
-    canRetry: messageStatus === "failed",
+    canRetry: messageStatus === "failed" || messageStatus === "submitted" || messageStatus === "sent",
     canResume: messageStatus === "queued",
     videoCount: Math.max(1, Number(videoCount) || 1),
     messagingKey: teacherKindKey(teacherPhone, kind),
@@ -601,18 +601,30 @@ export const queueTeacherVideoMessages = async (nominationVideoIds: string[], al
   };
 };
 
+export const queueNextReadyTeacherVideos = async (limit = 40) => {
+  const docs = await aggregateVideos<{ _id: unknown }>([
+    ...candidatePipeline({}),
+    { $match: statusMatchExpr("ready") },
+    { $limit: Math.max(1, limit) },
+    { $project: { _id: 1 } },
+  ]);
+  return queueTeacherVideoMessages(docs.map((doc) => String(doc._id)), false);
+};
+
 export const queueTeacherVideoMatching = async (opts: Omit<ListOpts, "page" | "limit">, allowRetry = false) => {
   const hasFilter = Boolean(text(opts.kind) || text(opts.photo) || text(opts.q) || opts.testOnly);
   if (allowRetry && !hasFilter) {
     const retried = await retryFailedNominationVideoWhatsAppJobs();
+    const ready = await queueNextReadyTeacherVideos();
+    const leftover = await drainQueuedNominationVideoWhatsAppJobs();
     return {
-      queued: retried.requeued,
-      submitted: retried.submitted,
-      failed: retried.failed,
-      remaining: retried.remainingFailed,
-      skipped: retried.skipped,
-      eventIds: [] as string[],
-      campaignId: randomUUID(),
+      queued: retried.requeued + ready.queued,
+      submitted: retried.submitted + (ready.submitted || 0) + leftover.submitted,
+      failed: retried.failed + (ready.failed || 0) + leftover.failed,
+      remaining: leftover.remaining + retried.remainingFailed,
+      skipped: retried.skipped + ready.skipped,
+      eventIds: ready.eventIds,
+      campaignId: ready.campaignId || randomUUID(),
       results: [] as Array<{
         nominationVideoId: string;
         ok: boolean;
@@ -625,7 +637,7 @@ export const queueTeacherVideoMatching = async (opts: Omit<ListOpts, "page" | "l
     };
   }
   const listed = await listTeacherVideoMessageIds(opts);
-  const ids = allowRetry ? listed.failedIds : listed.readyIds;
+  const ids = allowRetry ? [...new Set([...listed.failedIds, ...listed.readyIds])] : listed.readyIds;
   return queueTeacherVideoMessages(ids, allowRetry);
 };
 

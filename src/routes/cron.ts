@@ -3,6 +3,7 @@ import {
   drainQueuedNominationVideoWhatsAppJobs,
   retryFailedNominationVideoWhatsAppJobs,
 } from "../lib/nominationVideoWhatsApp";
+import { queueNextReadyTeacherVideos } from "../lib/teacherVideoMessaging";
 import { scanGroupsNeedingRetries } from "../lib/whatsappRetryOrchestrator";
 
 const router = Router();
@@ -25,8 +26,15 @@ router.get("/resume-teacher-video-whatsapp", async (req: Request, res: Response)
   }
   try {
     const retried = await retryFailedNominationVideoWhatsAppJobs();
+    const ready = await queueNextReadyTeacherVideos();
     const drained = await drainQueuedNominationVideoWhatsAppJobs();
-    res.json({ ok: true, retried, ...drained, remainingFailed: retried.remainingFailed });
+    res.json({
+      ok: true,
+      retried,
+      ready: { queued: ready.queued, submitted: ready.submitted || 0, remaining: ready.remaining || 0 },
+      ...drained,
+      remainingFailed: retried.remainingFailed,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Resume sweep failed";
     console.error("[cron resume-teacher-video-whatsapp]", message);
@@ -41,7 +49,15 @@ router.get("/retry-teacher-video-whatsapp", async (req: Request, res: Response) 
   }
   try {
     const retried = await retryFailedNominationVideoWhatsAppJobs();
-    res.json({ ok: true, ...retried });
+    const ready = await queueNextReadyTeacherVideos();
+    const drained = await drainQueuedNominationVideoWhatsAppJobs();
+    res.json({
+      ok: true,
+      ...retried,
+      readyQueued: ready.queued,
+      readySubmitted: ready.submitted || 0,
+      remaining: drained.remaining,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Retry sweep failed";
     console.error("[cron retry-teacher-video-whatsapp]", message);
