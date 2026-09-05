@@ -740,13 +740,27 @@ const isNonRetryableVideoFailure = (doc: {
   });
 };
 
-export const retryFailedNominationVideoWhatsAppJobs = async (limit = VIDEO_DRAIN_LIMIT) => {
-  const docs = await WhatsAppMessageEvent.find({
-    status: { $in: OUTSTANDING_VIDEO_STATUSES },
+const outstandingVideoRetryQuery = () => {
+  const staleBefore = new Date(Date.now() - 30 * 60 * 1000);
+  return {
     messageKind: { $in: NOMINATION_VIDEO_WHATSAPP_KINDS },
     retryCount: { $lt: VIDEO_RETRY_CAP },
     retryExclusionReason: { $nin: [RETRY_EXCLUSION_REASON.permanentFailure] },
-  })
+    $or: [
+      { status: { $in: ["failed", "retry_exhausted"] } },
+      {
+        status: { $in: ["submitted", "sent"] },
+        $or: [
+          { providerAcceptedAt: { $lte: staleBefore } },
+          { providerAcceptedAt: null, updatedAt: { $lte: staleBefore } },
+        ],
+      },
+    ],
+  };
+};
+
+export const retryFailedNominationVideoWhatsAppJobs = async (limit = VIDEO_DRAIN_LIMIT) => {
+  const docs = await WhatsAppMessageEvent.find(outstandingVideoRetryQuery())
     .select("_id nominationVideoId nominationId errorMessage webhookErrorReason webhookErrorCode sendErrorCode retryCount")
     .sort({ failedAt: 1, updatedAt: 1, createdAt: 1 })
     .limit(Math.max(40, limit * 3))
@@ -801,12 +815,7 @@ export const retryFailedNominationVideoWhatsAppJobs = async (limit = VIDEO_DRAIN
   const drained = eventIds.length
     ? await drainQueuedNominationVideoWhatsAppJobs(eventIds)
     : { resumed: 0, submitted: 0, failed: 0, remaining: 0 };
-  const remainingFailed = await WhatsAppMessageEvent.countDocuments({
-    status: { $in: OUTSTANDING_VIDEO_STATUSES },
-    messageKind: { $in: NOMINATION_VIDEO_WHATSAPP_KINDS },
-    retryCount: { $lt: VIDEO_RETRY_CAP },
-    retryExclusionReason: { $nin: [RETRY_EXCLUSION_REASON.permanentFailure] },
-  });
+  const remainingFailed = await WhatsAppMessageEvent.countDocuments(outstandingVideoRetryQuery());
   return { requeued, skipped, ...drained, remainingFailed };
 };
 
