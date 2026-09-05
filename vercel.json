@@ -4,5 +4,11 @@
     "src/index.ts": {
       "maxDuration": 300
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/resume-teacher-video-whatsapp",
+      "schedule": "* * * * *"
+    }
+  ]
 }

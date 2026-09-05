@@ -23,6 +23,7 @@ import { videoProductionValid } from "./videoIdentity";
 import { randomUUID } from "crypto";
 import {
   bulkEnqueueNominationVideoWhatsApp,
+  drainQueuedNominationVideoWhatsAppJobs,
   NOMINATION_VIDEO_WHATSAPP_KINDS,
   resumeQueuedNominationVideoWhatsAppJobs,
   teacherKindKey,
@@ -625,13 +626,24 @@ export const resumeTeacherVideoMessages = async (nominationVideoIds?: string[]) 
     gupshupMessageId: null,
   };
   if (ids.length) query.nominationVideoId = { $in: ids };
-  const docs = await WhatsAppMessageEvent.find(query).select("_id").lean();
+  const docs = ids.length
+    ? await WhatsAppMessageEvent.find(query).select("_id").lean()
+    : [];
   const eventIds = docs.map((doc) => String(doc._id));
-  const queued = eventIds.length ? await resumeQueuedNominationVideoWhatsAppJobs(eventIds) : 0;
+  const drained =
+    ids.length && !eventIds.length
+      ? { resumed: 0, submitted: 0, failed: 0, remaining: 0 }
+      : await drainQueuedNominationVideoWhatsAppJobs(eventIds.length ? eventIds : undefined);
+  if (!process.env.VERCEL && drained.remaining > 0) {
+    await resumeQueuedNominationVideoWhatsAppJobs(eventIds.length ? eventIds : undefined);
+  }
   return {
-    queued,
+    queued: drained.resumed,
+    submitted: drained.submitted,
+    failed: drained.failed,
+    remaining: drained.remaining,
     skipped: 0,
-    eventIds,
+    eventIds: eventIds.length ? eventIds : [],
     campaignId: randomUUID(),
     results: [] as Array<{
       nominationVideoId: string;
@@ -646,8 +658,10 @@ export const resumeTeacherVideoMessages = async (nominationVideoIds?: string[]) 
 };
 
 export const resumeTeacherVideoMatching = async (opts: Omit<ListOpts, "page" | "limit">) => {
+  const hasFilter = Boolean(text(opts.kind) || text(opts.photo) || text(opts.q) || opts.testOnly);
+  if (!hasFilter) return resumeTeacherVideoMessages();
   const listed = await listTeacherVideoMessageIds({ ...opts, status: "queued" });
-  return resumeTeacherVideoMessages(listed.queuedIds.length ? listed.queuedIds : listed.ids);
+  return resumeTeacherVideoMessages(listed.queuedIds.length ? listed.queuedIds : []);
 };
 
 export const progressForEventIds = async (eventIds: string[], campaignId?: string) => {

@@ -665,16 +665,56 @@ export const findQueuedNominationVideoWhatsAppEventId = async (nominationVideoId
   return event ? String(event._id) : null;
 };
 
-export const resumeQueuedNominationVideoWhatsAppJobs = async (eventIds?: string[]) => {
+const queuedVideoWhatsAppQuery = (eventIds?: string[]) => {
   const ids = (eventIds || []).map((id) => String(id || "").trim()).filter((id) => Types.ObjectId.isValid(id));
-  const docs = await WhatsAppMessageEvent.find({
-    status: "queued",
+  return {
+    status: "queued" as const,
     messageKind: { $in: NOMINATION_VIDEO_WHATSAPP_KINDS },
     gupshupMessageId: null,
     ...(ids.length ? { _id: { $in: ids } } : {}),
-  })
+  };
+};
+
+const VIDEO_DRAIN_LIMIT = process.env.VERCEL ? 40 : 400;
+const VIDEO_DRAIN_CONCURRENCY = process.env.VERCEL ? 4 : VIDEO_SEND_CONCURRENCY;
+
+export const drainQueuedNominationVideoWhatsAppJobs = async (eventIds?: string[], limit = VIDEO_DRAIN_LIMIT) => {
+  const docs = await WhatsAppMessageEvent.find(queuedVideoWhatsAppQuery(eventIds))
     .select("_id")
+    .sort({ createdAt: 1 })
+    .limit(Math.max(1, limit))
     .lean();
+  const queuedIds = docs.map((doc) => String(doc._id));
+  let submitted = 0;
+  let failed = 0;
+  console.log(`[WhatsApp] draining ${queuedIds.length} queued nomination video message(s)`);
+  for (let i = 0; i < queuedIds.length; i += VIDEO_DRAIN_CONCURRENCY) {
+    const chunk = queuedIds.slice(i, i + VIDEO_DRAIN_CONCURRENCY);
+    const results = await Promise.all(
+      chunk.map(async (eventId) => {
+        try {
+          return await processNominationVideoWhatsAppDelivery(eventId);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error("[WhatsApp] nomination video drain failed", message);
+          await markQueuedEventFailed(eventId, message).catch(() => undefined);
+          return { ok: false, status: "failed" as const };
+        }
+      })
+    );
+    for (const result of results) {
+      if (result.ok || result.status === "submitted") submitted += 1;
+      else failed += 1;
+    }
+  }
+  const remaining = await WhatsAppMessageEvent.countDocuments(queuedVideoWhatsAppQuery(eventIds));
+  return { resumed: queuedIds.length, submitted, failed, remaining };
+};
+
+export const resumeQueuedNominationVideoWhatsAppJobs = async (eventIds?: string[]) => {
+  // Vercel has no durable in-memory queue. Startup resume is a no-op; cron/admin drain instead.
+  if (process.env.VERCEL) return 0;
+  const docs = await WhatsAppMessageEvent.find(queuedVideoWhatsAppQuery(eventIds)).select("_id").lean();
   const queuedIds = docs.map((doc) => String(doc._id));
   if (!queuedIds.length) return 0;
   console.log(`[WhatsApp] resuming ${queuedIds.length} queued nomination video message(s)`);
