@@ -38,6 +38,7 @@ import {
   templateEnvKeyForKind,
   templateIdForKind,
 } from "./gupshup";
+import { isMetaPermanentProviderError } from "./whatsappRetryRules";
 import { videoProductionValid } from "./videoIdentity";
 
 export const NOMINATION_VIDEO_WHATSAPP_KIND: Record<NominationKind, string> = {
@@ -709,6 +710,66 @@ export const drainQueuedNominationVideoWhatsAppJobs = async (eventIds?: string[]
   }
   const remaining = await WhatsAppMessageEvent.countDocuments(queuedVideoWhatsAppQuery(eventIds));
   return { resumed: queuedIds.length, submitted, failed, remaining };
+};
+
+const VIDEO_RETRY_CAP = 8;
+const NON_RETRYABLE_VIDEO_FAIL =
+  /opted_out|Recipient opted out|missing_teacher_phone|invalid_destination|invalid_video_url|video_not_generated|video_category_mismatch|review_blocked|nomination_not_found|nomination_draft|after_session_excluded|template_id_missing|not whatsapp|no whatsapp|not.*registered|blocked|blacklist|unregistered|ecosystem engagement|healthy ecosystem|re-engagement|131047|131048|131049/i;
+
+const isNonRetryableVideoFailure = (doc: {
+  errorMessage?: string | null;
+  webhookErrorReason?: string | null;
+  webhookErrorCode?: string | null;
+  sendErrorCode?: string | null;
+}) => {
+  const hay = [doc.errorMessage, doc.webhookErrorReason, doc.webhookErrorCode, doc.sendErrorCode]
+    .filter(Boolean)
+    .join(" | ");
+  if (hay && NON_RETRYABLE_VIDEO_FAIL.test(hay)) return true;
+  return isMetaPermanentProviderError({
+    errorCode: doc.webhookErrorCode || doc.sendErrorCode,
+    errorMessage: doc.errorMessage || doc.webhookErrorReason,
+  });
+};
+
+export const retryFailedNominationVideoWhatsAppJobs = async (limit = VIDEO_DRAIN_LIMIT) => {
+  const docs = await WhatsAppMessageEvent.find({
+    status: { $in: ["failed", "retry_exhausted"] },
+    messageKind: { $in: NOMINATION_VIDEO_WHATSAPP_KINDS },
+    retryCount: { $lt: VIDEO_RETRY_CAP },
+  })
+    .select("_id nominationVideoId nominationId errorMessage webhookErrorReason webhookErrorCode sendErrorCode retryCount")
+    .sort({ failedAt: 1, createdAt: 1 })
+    .limit(Math.max(40, limit * 3))
+    .lean();
+
+  const retryable = docs.filter((doc) => !isNonRetryableVideoFailure(doc)).slice(0, Math.max(1, limit));
+  let requeued = 0;
+  let skipped = docs.length - retryable.length;
+  const eventIds: string[] = [];
+  for (const doc of retryable) {
+    const result = await enqueueNominationVideoWhatsApp({
+      nominationVideoId: String(doc.nominationVideoId || ""),
+      nominationId: String(doc.nominationId || ""),
+      allowRetry: true,
+      source: "admin_manual",
+    });
+    if (result.ok && result.shouldSend && result.eventId) {
+      requeued += 1;
+      eventIds.push(result.eventId);
+    } else {
+      skipped += 1;
+    }
+  }
+  const drained = eventIds.length
+    ? await drainQueuedNominationVideoWhatsAppJobs(eventIds)
+    : { resumed: 0, submitted: 0, failed: 0, remaining: 0 };
+  const remainingFailed = await WhatsAppMessageEvent.countDocuments({
+    status: { $in: ["failed", "retry_exhausted"] },
+    messageKind: { $in: NOMINATION_VIDEO_WHATSAPP_KINDS },
+    retryCount: { $lt: VIDEO_RETRY_CAP },
+  });
+  return { requeued, skipped, ...drained, remainingFailed };
 };
 
 export const resumeQueuedNominationVideoWhatsAppJobs = async (eventIds?: string[]) => {

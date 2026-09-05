@@ -26,6 +26,7 @@ import {
   drainQueuedNominationVideoWhatsAppJobs,
   NOMINATION_VIDEO_WHATSAPP_KINDS,
   resumeQueuedNominationVideoWhatsAppJobs,
+  retryFailedNominationVideoWhatsAppJobs,
   teacherKindKey,
   templateEnvKeyForNominationKind,
   VIDEO_MESSAGING_TEST_PHONE,
@@ -577,8 +578,14 @@ export const queueTeacherVideoMessages = async (nominationVideoIds: string[], al
     allowRetry,
     source: "admin_manual",
   });
+  const drained = result.eventIds.length
+    ? await drainQueuedNominationVideoWhatsAppJobs(result.eventIds)
+    : { resumed: 0, submitted: 0, failed: 0, remaining: 0 };
   return {
     queued: result.queued,
+    submitted: drained.submitted,
+    failed: drained.failed,
+    remaining: drained.remaining,
     skipped: result.skipped,
     eventIds: result.eventIds,
     campaignId: result.campaignId,
@@ -595,6 +602,28 @@ export const queueTeacherVideoMessages = async (nominationVideoIds: string[], al
 };
 
 export const queueTeacherVideoMatching = async (opts: Omit<ListOpts, "page" | "limit">, allowRetry = false) => {
+  const hasFilter = Boolean(text(opts.kind) || text(opts.photo) || text(opts.q) || opts.testOnly);
+  if (allowRetry && !hasFilter) {
+    const retried = await retryFailedNominationVideoWhatsAppJobs();
+    return {
+      queued: retried.requeued,
+      submitted: retried.submitted,
+      failed: retried.failed,
+      remaining: retried.remainingFailed,
+      skipped: retried.skipped,
+      eventIds: [] as string[],
+      campaignId: randomUUID(),
+      results: [] as Array<{
+        nominationVideoId: string;
+        ok: boolean;
+        queued?: boolean;
+        duplicate?: boolean;
+        status: string;
+        eventId: string | null;
+        error?: string;
+      }>,
+    };
+  }
   const listed = await listTeacherVideoMessageIds(opts);
   const ids = allowRetry ? listed.failedIds : listed.readyIds;
   return queueTeacherVideoMessages(ids, allowRetry);

@@ -1,5 +1,8 @@
 import { Router, Request, Response } from "express";
-import { drainQueuedNominationVideoWhatsAppJobs } from "../lib/nominationVideoWhatsApp";
+import {
+  drainQueuedNominationVideoWhatsAppJobs,
+  retryFailedNominationVideoWhatsAppJobs,
+} from "../lib/nominationVideoWhatsApp";
 import { scanGroupsNeedingRetries } from "../lib/whatsappRetryOrchestrator";
 
 const router = Router();
@@ -21,11 +24,27 @@ router.get("/resume-teacher-video-whatsapp", async (req: Request, res: Response)
     return;
   }
   try {
+    const retried = await retryFailedNominationVideoWhatsAppJobs();
     const drained = await drainQueuedNominationVideoWhatsAppJobs();
-    res.json({ ok: true, ...drained });
+    res.json({ ok: true, retried, ...drained, remainingFailed: retried.remainingFailed });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Resume sweep failed";
     console.error("[cron resume-teacher-video-whatsapp]", message);
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/retry-teacher-video-whatsapp", async (req: Request, res: Response) => {
+  if (!authorizeCron(req)) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  try {
+    const retried = await retryFailedNominationVideoWhatsAppJobs();
+    res.json({ ok: true, ...retried });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Retry sweep failed";
+    console.error("[cron retry-teacher-video-whatsapp]", message);
     res.status(500).json({ error: message });
   }
 });
