@@ -38,7 +38,7 @@ import {
   templateEnvKeyForKind,
   templateIdForKind,
 } from "./gupshup";
-import { isMetaPermanentProviderError } from "./whatsappRetryRules";
+import { isMetaPermanentProviderError, RETRY_EXCLUSION_REASON } from "./whatsappRetryRules";
 import { videoProductionValid } from "./videoIdentity";
 
 export const NOMINATION_VIDEO_WHATSAPP_KIND: Record<NominationKind, string> = {
@@ -743,9 +743,23 @@ export const retryFailedNominationVideoWhatsAppJobs = async (limit = VIDEO_DRAIN
     .limit(Math.max(40, limit * 3))
     .lean();
 
+  const nonRetryable = docs.filter((doc) => isNonRetryableVideoFailure(doc));
+  if (nonRetryable.length) {
+    await WhatsAppMessageEvent.updateMany(
+      { _id: { $in: nonRetryable.map((doc) => doc._id) } },
+      {
+        $set: {
+          retryCount: VIDEO_RETRY_CAP,
+          retryExclusionReason: RETRY_EXCLUSION_REASON.permanentFailure,
+          retryExclusionAt: new Date(),
+          updatedAt: new Date(),
+        },
+      }
+    );
+  }
   const retryable = docs.filter((doc) => !isNonRetryableVideoFailure(doc)).slice(0, Math.max(1, limit));
   let requeued = 0;
-  let skipped = docs.length - retryable.length;
+  let skipped = nonRetryable.length;
   const eventIds: string[] = [];
   for (const doc of retryable) {
     const result = await enqueueNominationVideoWhatsApp({
@@ -759,6 +773,20 @@ export const retryFailedNominationVideoWhatsAppJobs = async (limit = VIDEO_DRAIN
       eventIds.push(result.eventId);
     } else {
       skipped += 1;
+      if (!result.duplicate) {
+        await WhatsAppMessageEvent.updateOne(
+          { _id: doc._id },
+          {
+            $set: {
+              retryCount: VIDEO_RETRY_CAP,
+              retryExclusionReason: RETRY_EXCLUSION_REASON.permanentFailure,
+              retryExclusionAt: new Date(),
+              errorMessage: (result.error || doc.errorMessage || "not_retryable").toString().slice(0, 2000),
+              updatedAt: new Date(),
+            },
+          }
+        );
+      }
     }
   }
   const drained = eventIds.length
