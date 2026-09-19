@@ -27,8 +27,8 @@ export const seedSuperAdmin = async () => {
     return;
   }
 
-  let user = await AdminUser.findOne({ role: "super_admin" });
-  if (!user) user = await findAdminByUsername(username);
+  let user = await findAdminByUsername(username);
+  if (!user) user = await AdminUser.findOne({ role: "super_admin" });
 
   if (!user) {
     await AdminUser.create({

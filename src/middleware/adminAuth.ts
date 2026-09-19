@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { Request, Response, NextFunction } from "express";
 import { AdminUser } from "../models/AdminUser";
 import { AdminSession, hashSessionToken } from "../models/AdminSession";
@@ -53,7 +54,25 @@ export const adminAuth = async (req: Request, res: Response, next: NextFunction)
         return;
       }
 
-      const user = await AdminUser.findById(session.admin_user_id);
+      let user = await AdminUser.findById(session.admin_user_id);
+      if (!user && session.admin_user_id) {
+        try {
+          const raw = await AdminUser.collection.findOne({
+            $or: [
+              { _id: session.admin_user_id as any },
+              ...(mongoose.Types.ObjectId.isValid(session.admin_user_id)
+                ? [{ _id: new mongoose.Types.ObjectId(session.admin_user_id) }]
+                : []),
+            ],
+          });
+          if (raw) {
+            user = new AdminUser(raw);
+          }
+        } catch {
+          // ignore lookup error
+        }
+      }
+
       if (!user || !user.active) {
         await AdminSession.deleteMany({ admin_user_id: session.admin_user_id });
         res.status(401).json({ error: "Account is disabled. Please contact the super admin." });

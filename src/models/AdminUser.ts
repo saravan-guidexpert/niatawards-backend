@@ -12,7 +12,7 @@ const jsonTransform = (_doc: unknown, ret: Record<string, unknown>) => {
 
 const adminUserSchema = new Schema(
   {
-    _id: { type: String, default: () => randomUUID() },
+    _id: { type: Schema.Types.Mixed, default: () => randomUUID() },
     created_at: { type: Date, default: Date.now },
     updated_at: { type: Date, default: Date.now },
     username: { type: String, required: true, unique: true, trim: true },
