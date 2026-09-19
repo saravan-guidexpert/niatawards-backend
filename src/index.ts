@@ -19,6 +19,7 @@ import funnelRoutes from "./routes/funnel";
 import gupshupWebhookRoutes from "./routes/gupshupWebhook";
 import cronRoutes from "./routes/cron";
 import nominationVideoRoutes from "./routes/nominationVideos";
+import fdpRoutes from "./routes/fdp";
 import { seedSuperAdmin } from "./lib/seedSuperAdmin";
 import { startVideoGenerationWorker } from "./lib/videoGenerationWorker";
 import { resumeQueuedNominationVideoWhatsAppJobs } from "./lib/nominationVideoWhatsApp";
@@ -91,6 +92,7 @@ app.use("/api/uploads", uploadRoutes);
 app.use("/api/utm", utmRoutes);
 app.use("/api/funnel", funnelRoutes);
 app.use("/api/nomination-videos", nominationVideoRoutes);
+app.use("/api/fdp", fdpRoutes);
 
 const start = async () => {
   await connectDB();

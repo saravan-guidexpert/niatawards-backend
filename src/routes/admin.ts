@@ -36,6 +36,7 @@ import videoReviewAdminRoutes from "./videoReviewAdmin";
 import teacherPortraitsAdminRoutes from "./teacherPortraitsAdmin";
 import videoGenerationAdminRoutes from "./videoGenerationAdmin";
 import afterSessionNominationsAdminRoutes from "./afterSessionNominationsAdmin";
+import fdpAdminRoutes from "./fdpAdmin";
 
 const router = Router();
 
@@ -118,6 +119,11 @@ router.use(
   "/after-session-nominations",
   requireAnyPermission("nominations", "campaigns", "digital"),
   afterSessionNominationsAdminRoutes
+);
+router.use(
+  "/fdp",
+  requireAnyPermission("nominations", "campaigns", "digital", "whatsapp"),
+  fdpAdminRoutes
 );
 
 router.get("/me", (req: Request, res: Response) => {
