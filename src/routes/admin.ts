@@ -37,6 +37,7 @@ import teacherPortraitsAdminRoutes from "./teacherPortraitsAdmin";
 import videoGenerationAdminRoutes from "./videoGenerationAdmin";
 import afterSessionNominationsAdminRoutes from "./afterSessionNominationsAdmin";
 import fdpAdminRoutes from "./fdpAdmin";
+import momentosAdminRoutes from "./momentosAdmin";
 
 const router = Router();
 
@@ -125,6 +126,7 @@ router.use(
   requireAnyPermission("nominations", "campaigns", "digital", "whatsapp"),
   fdpAdminRoutes
 );
+router.use("/momentos", requirePermission("nominations"), momentosAdminRoutes);
 
 router.get("/me", (req: Request, res: Response) => {
   res.json({ user: req.admin });

@@ -45,10 +45,27 @@ export const resolveCategoryIcon = (
   return pickRandomCategoryIcon(root);
 };
 
+/** Display names painted on the 12 category SVGs (Group.svg … Group-11.svg). */
+export const CATEGORY_ICON_DISPLAY_NAMES: Record<string, string> = {
+  group: "motivation icon",
+  "group-1": "support champion",
+  "group-2": "role model icon",
+  "group-3": "guiding star",
+  "group-4": "discipline champion",
+  "group-5": "caring hero",
+  "group-6": "classroom rockstar",
+  "group-7": "creative spark",
+  "group-8": "knowledge icon",
+  "group-9": "confidence builder",
+  "group-10": "patience champion",
+  "group-11": "inspiration icon",
+};
+
 export const categoryIconLabel = (filename: string | null | undefined) => {
   const stem = String(filename || "").replace(/\.svg$/i, "").trim();
   if (!stem) return "Not selected";
-  return stem.replace(/-/g, " ");
+  const key = stem.toLowerCase().replace(/\s+/g, "-");
+  return CATEGORY_ICON_DISPLAY_NAMES[key] || stem.replace(/-/g, " ");
 };
 
 const viewBoxSize = (svg: string) => {
