@@ -1,4 +1,6 @@
 import { ANDHRA_PRADESH_MOMENTO_TEACHERS } from "../src/data/andhraPradeshMomentoTeachers";
+import { KARNATAKA_ONE_MOMENTO_TEACHERS } from "../src/data/karnatakaOneMomentoTeachers";
+import { KARNATAKA_MOMENTO_TEACHERS } from "../src/data/karnatakaMomentoTeachers";
 import { TAMIL_NADU_MOMENTO_TEACHERS } from "../src/data/tamilNaduMomentoTeachers";
 import { UTTAR_PRADESH_MOMENTO_TEACHERS } from "../src/data/uttarPradeshMomentoTeachers";
 import { MOMENTO_TEACHERS } from "../src/data/momentoTeachers";
@@ -11,9 +13,9 @@ const assert = (ok: boolean, message: string) => {
 };
 
 const roster: MomentoTeacher[] = [
-  { name: "G KAVITHA", phone: "9535397094", region: "Karnataka" },
-  { name: "Dr Bhurli Prahlad", phone: "", region: "Karnataka" },
-  { name: "Unmatched Teacher", phone: "9000000001", region: "Karnataka" },
+  { name: "G KAVITHA", phone: "9535397094", region: "Karnataka 2" },
+  { name: "Dr Bhurli Prahlad", phone: "", region: "Karnataka 2" },
+  { name: "Unmatched Teacher", phone: "9000000001", region: "Karnataka 2" },
 ];
 
 const rows = buildMomentoRows(
@@ -67,7 +69,7 @@ assert(unmatched.video_count === 0, "unknown phone has no videos");
 assert(unmatched.momentos.length === 0, "unknown phone has no momentos");
 
 const recordedOnly = buildMomentoRows(
-  [{ name: "Older Video", phone: "9886646667", region: "Karnataka" }],
+  [{ name: "Older Video", phone: "9886646667", region: "Karnataka 2" }],
   [{ _id: "old-1", phone: "9886646667", status: "pending" }],
   [
     {
@@ -83,7 +85,7 @@ assert(recordedOnly[0].momentos.length === 0, "missing stored icon must not inve
 assert(recordedOnly[0].videos[0].category_icon_label === null, "missing filename stays null");
 
 const groupNames = buildMomentoRows(
-  [{ name: "Mapped Teacher", phone: "9845185324", region: "Karnataka" }],
+  [{ name: "Mapped Teacher", phone: "9845185324", region: "Karnataka 2" }],
   [{ _id: "g1", phone: "9845185324", status: "pending" }],
   [
     {
@@ -97,7 +99,7 @@ const groupNames = buildMomentoRows(
 assert(groupNames[0].momentos[0] === "knowledge icon", "Group-8.svg must display as knowledge icon");
 
 const motivation = buildMomentoRows(
-  [{ name: "Mapped Teacher 2", phone: "9845185325", region: "Karnataka" }],
+  [{ name: "Mapped Teacher 2", phone: "9845185325", region: "Karnataka 2" }],
   [{ _id: "g0", phone: "9845185325", status: "pending" }],
   [
     {
@@ -110,6 +112,31 @@ const motivation = buildMomentoRows(
 );
 assert(motivation[0].momentos[0] === "motivation icon", "Group.svg must display as motivation icon");
 
+assert(KARNATAKA_ONE_MOMENTO_TEACHERS.length === 143, "Karnataka 1 roster should keep all 143 provided rows");
+assert(
+  KARNATAKA_ONE_MOMENTO_TEACHERS.every((row) => row.region === "Karnataka 1"),
+  "Karnataka 1 roster region must be Karnataka 1"
+);
+assert(
+  MOMENTO_TEACHERS.some((row) => row.name === "Vinaya Mk" && row.phone === "9964594386" && row.region === "Karnataka 1"),
+  "Karnataka 1 teachers must be included in the combined roster"
+);
+assert(
+  KARNATAKA_ONE_MOMENTO_TEACHERS.find((row) => row.name === "Ashwath")?.phone === "",
+  "Ashwath has no usable phone"
+);
+assert(
+  KARNATAKA_ONE_MOMENTO_TEACHERS.find((row) => row.name === "Rabbiya")?.phone === "",
+  "Rabbiya has no usable phone"
+);
+assert(
+  KARNATAKA_ONE_MOMENTO_TEACHERS.find((row) => row.name === "Gulfa")?.phone === "8861472518",
+  "Gulfa phone should be normalized"
+);
+assert(
+  KARNATAKA_MOMENTO_TEACHERS.every((row) => row.region === "Karnataka 2"),
+  "Existing Karnataka roster region must be Karnataka 2"
+);
 assert(TELANGANA_MOMENTO_TEACHERS.length === 36, "Telangana roster should keep all 36 provided rows");
 assert(
   TELANGANA_MOMENTO_TEACHERS.every((row) => row.region === "Telangana"),

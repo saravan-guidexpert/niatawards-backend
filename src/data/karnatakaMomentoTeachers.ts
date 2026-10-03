@@ -1,4 +1,4 @@
-export type MomentoRegion = "Karnataka" | "Telangana" | "Andhra Pradesh" | "Tamil Nadu" | "Uttar Pradesh";
+export type MomentoRegion = "Karnataka 1" | "Karnataka 2" | "Telangana" | "Andhra Pradesh" | "Tamil Nadu" | "Uttar Pradesh";
 
 export type MomentoTeacher = {
   name: string;
@@ -118,5 +118,5 @@ const RAW: Array<{ name: string; phone?: string }> = [
 export const KARNATAKA_MOMENTO_TEACHERS: MomentoTeacher[] = RAW.map((row) => ({
   name: row.name.trim(),
   phone: phone10(row.phone),
-  region: "Karnataka",
+  region: "Karnataka 2",
 }));
