@@ -2,6 +2,8 @@ import { ANDHRA_PRADESH_MOMENTO_TEACHERS } from "../src/data/andhraPradeshMoment
 import { KARNATAKA_ONE_MOMENTO_TEACHERS } from "../src/data/karnatakaOneMomentoTeachers";
 import { KARNATAKA_MOMENTO_TEACHERS } from "../src/data/karnatakaMomentoTeachers";
 import { TAMIL_NADU_MOMENTO_TEACHERS } from "../src/data/tamilNaduMomentoTeachers";
+import { ODISHA_MOMENTO_TEACHERS } from "../src/data/odishaMomentoTeachers";
+import { RAJASTHAN_MOMENTO_TEACHERS } from "../src/data/rajasthanMomentoTeachers";
 import { UTTAR_PRADESH_MOMENTO_TEACHERS } from "../src/data/uttarPradeshMomentoTeachers";
 import { MOMENTO_TEACHERS } from "../src/data/momentoTeachers";
 import { TELANGANA_MOMENTO_TEACHERS } from "../src/data/telanganaMomentoTeachers";
@@ -176,6 +178,40 @@ assert(
 assert(
   MOMENTO_TEACHERS.some((row) => row.name === "Tulika gupta" && row.phone === "7985940291"),
   "Uttar Pradesh teachers must be included in the combined roster"
+);
+assert(RAJASTHAN_MOMENTO_TEACHERS.length === 144, "Rajasthan roster should keep all 144 provided rows");
+assert(
+  RAJASTHAN_MOMENTO_TEACHERS.every((row) => row.region === "Rajasthan"),
+  "Rajasthan roster region must be Rajasthan"
+);
+assert(
+  MOMENTO_TEACHERS.some((row) => row.name === "Devendra Agrawal" && row.phone === "9414752385" && row.region === "Rajasthan"),
+  "Rajasthan teachers must be included in the combined roster"
+);
+assert(
+  RAJASTHAN_MOMENTO_TEACHERS.find((row) => row.name === "Atul Gupta")?.phone === "",
+  "Atul Gupta has no precise phone match"
+);
+assert(
+  RAJASTHAN_MOMENTO_TEACHERS.find((row) => row.name === "PRIYANKA SHARMA")?.phone === "9982903555",
+  "Priyanka Sharma should use the Jaipur Subodh phone stored as Priyenka Sharma"
+);
+assert(ODISHA_MOMENTO_TEACHERS.length === 36, "Odisha roster should keep all 36 provided rows");
+assert(
+  ODISHA_MOMENTO_TEACHERS.every((row) => row.region === "Odisha"),
+  "Odisha roster region must be Odisha"
+);
+assert(
+  MOMENTO_TEACHERS.some((row) => row.name === "Jiban Kishore Mishra" && row.phone === "9777012425" && row.region === "Odisha"),
+  "Odisha teachers must be included in the combined roster"
+);
+assert(
+  ODISHA_MOMENTO_TEACHERS.find((row) => row.name === "Sukant Mohaptra")?.phone === "",
+  "Sukant Mohaptra has no precise phone match"
+);
+assert(
+  ODISHA_MOMENTO_TEACHERS.find((row) => row.name === "Rajendra Kumar Padhi")?.phone === "9439011323",
+  "Rajendra Kumar Padhi phone should match the nomination"
 );
 
 console.log("momentos.selftest ok");

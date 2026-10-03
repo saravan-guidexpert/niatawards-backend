@@ -1,4 +1,4 @@
-export type MomentoRegion = "Karnataka 1" | "Karnataka 2" | "Telangana" | "Andhra Pradesh" | "Tamil Nadu" | "Uttar Pradesh";
+export type MomentoRegion = "Karnataka 1" | "Karnataka 2" | "Telangana" | "Andhra Pradesh" | "Tamil Nadu" | "Uttar Pradesh" | "Rajasthan" | "Odisha";
 
 export type MomentoTeacher = {
   name: string;
