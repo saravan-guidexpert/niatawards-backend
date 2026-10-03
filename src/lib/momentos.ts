@@ -1,4 +1,4 @@
-import { categoryIconLabel } from "./categoryIcons";
+import { CATEGORY_ICON_DISPLAY_NAMES, categoryIconLabel } from "./categoryIcons";
 import { isSubmittedNomination } from "./nominationKind";
 import { phone10 } from "./resolveTeacherPortrait";
 import type { MomentoTeacher } from "../data/karnatakaMomentoTeachers";
@@ -54,6 +54,16 @@ const videoTime = (value: Date | string | null | undefined) => {
   return Number.isNaN(ms) ? 0 : ms;
 };
 
+const FALLBACK_MOMENTOS = Object.values(CATEGORY_ICON_DISPLAY_NAMES);
+
+/** Stable across requests so a teacher keeps the same assigned momento. */
+const fallbackMomento = (teacher: MomentoTeacher, index: number) => {
+  const seed = `${teacher.region}|${teacher.name}|${teacher.phone}|${index}`;
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  return FALLBACK_MOMENTOS[hash % FALLBACK_MOMENTOS.length];
+};
+
 export const buildMomentoRows = (
   roster: MomentoTeacher[],
   nominations: MomentoNominationInput[],
@@ -101,7 +111,7 @@ export const buildMomentoRows = (
       .reverse()
       .map((video) => video.category_icon_label)
       .find((label): label is string => Boolean(label));
-    const momentos = momento ? [momento] : [];
+    const momentos = [momento || fallbackMomento(teacher, index)];
 
     return {
       id: `${teacher.region}-${phone || "no-phone"}-${index}`,

@@ -63,12 +63,18 @@ assert(
 
 const noPhone = rows[1];
 assert(noPhone.matched === false, "teacher without a phone stays unmatched");
-assert(noPhone.momentos.length === 0, "unmatched teacher has no momentos");
+assert(noPhone.momentos.length === 1, "unmatched teacher still gets one momento");
+assert(
+  ["motivation icon", "support champion", "role model icon", "guiding star", "discipline champion", "caring hero", "classroom rockstar", "creative spark", "knowledge icon", "confidence builder", "patience champion", "inspiration icon"].includes(noPhone.momentos[0]),
+  "fallback momento must be one of the 12 category icons"
+);
 
 const unmatched = rows[2];
 assert(unmatched.matched === false, "unknown phone stays unmatched");
 assert(unmatched.video_count === 0, "unknown phone has no videos");
-assert(unmatched.momentos.length === 0, "unknown phone has no momentos");
+assert(unmatched.momentos.length === 1, "teacher without a video still gets one momento");
+const again = buildMomentoRows(roster, [], []);
+assert(again[2].momentos[0] === unmatched.momentos[0], "fallback momento stays the same for the same teacher");
 
 const recordedOnly = buildMomentoRows(
   [{ name: "Older Video", phone: "9886646667", region: "Karnataka 2" }],
@@ -83,7 +89,7 @@ const recordedOnly = buildMomentoRows(
   ]
 );
 assert(recordedOnly[0].video_count === 1, "generated video without icon still counts");
-assert(recordedOnly[0].momentos.length === 0, "missing stored icon must not invent a momento");
+assert(recordedOnly[0].momentos.length === 1, "missing stored icon still gets a fallback momento");
 assert(recordedOnly[0].videos[0].category_icon_label === null, "missing filename stays null");
 
 const groupNames = buildMomentoRows(
