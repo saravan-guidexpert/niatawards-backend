@@ -220,14 +220,18 @@ assert(
   ODISHA_MOMENTO_TEACHERS.find((row) => row.name === "Rajendra Kumar Padhi")?.phone === "9439011323",
   "Rajendra Kumar Padhi phone should match the nomination"
 );
-assert(MAHARASHTRA_MOMENTO_TEACHERS.length === 95, "Maharashtra roster should keep all 95 provided rows");
+assert(MAHARASHTRA_MOMENTO_TEACHERS.length === 201, "Maharashtra roster should keep all 201 provided rows");
 assert(
   MAHARASHTRA_MOMENTO_TEACHERS.every((row) => row.region === "Maharashtra"),
   "Maharashtra roster region must be Maharashtra"
 );
 assert(
-  MOMENTO_TEACHERS.some((row) => row.name === "SAVITRI DAKARE" && row.phone === "9226011454" && row.region === "Maharashtra"),
+  MOMENTO_TEACHERS.some((row) => row.name === "Yogesh Shantaram Lathe" && row.phone === "8956285626" && row.region === "Maharashtra"),
   "Maharashtra teachers must be included in the combined roster"
+);
+assert(
+  MAHARASHTRA_MOMENTO_TEACHERS.find((row) => row.name === "Prafull Shahare")?.phone === "9273307495",
+  "Dashed Maharashtra phones should be stored as 10 digits"
 );
 assert(
   MAHARASHTRA_MOMENTO_TEACHERS.find((row) => row.name === "judith nelson")?.phone === "256227580",
