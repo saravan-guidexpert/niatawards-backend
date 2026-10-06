@@ -2,6 +2,7 @@ import { ANDHRA_PRADESH_MOMENTO_TEACHERS } from "../src/data/andhraPradeshMoment
 import { KARNATAKA_ONE_MOMENTO_TEACHERS } from "../src/data/karnatakaOneMomentoTeachers";
 import { KARNATAKA_MOMENTO_TEACHERS } from "../src/data/karnatakaMomentoTeachers";
 import { TAMIL_NADU_MOMENTO_TEACHERS } from "../src/data/tamilNaduMomentoTeachers";
+import { MAHARASHTRA_MOMENTO_TEACHERS } from "../src/data/maharashtraMomentoTeachers";
 import { ODISHA_MOMENTO_TEACHERS } from "../src/data/odishaMomentoTeachers";
 import { RAJASTHAN_MOMENTO_TEACHERS } from "../src/data/rajasthanMomentoTeachers";
 import { UTTAR_PRADESH_MOMENTO_TEACHERS } from "../src/data/uttarPradeshMomentoTeachers";
@@ -218,6 +219,23 @@ assert(
 assert(
   ODISHA_MOMENTO_TEACHERS.find((row) => row.name === "Rajendra Kumar Padhi")?.phone === "9439011323",
   "Rajendra Kumar Padhi phone should match the nomination"
+);
+assert(MAHARASHTRA_MOMENTO_TEACHERS.length === 95, "Maharashtra roster should keep all 95 provided rows");
+assert(
+  MAHARASHTRA_MOMENTO_TEACHERS.every((row) => row.region === "Maharashtra"),
+  "Maharashtra roster region must be Maharashtra"
+);
+assert(
+  MOMENTO_TEACHERS.some((row) => row.name === "SAVITRI DAKARE" && row.phone === "9226011454" && row.region === "Maharashtra"),
+  "Maharashtra teachers must be included in the combined roster"
+);
+assert(
+  MAHARASHTRA_MOMENTO_TEACHERS.find((row) => row.name === "judith nelson")?.phone === "256227580",
+  "Judith Nelson's short number should stay on the row"
+);
+assert(
+  MAHARASHTRA_MOMENTO_TEACHERS.filter((row) => row.name === "Vishal hanumant chavan").map((row) => row.phone).join(",") === "9270058192,7720884587",
+  "Both Vishal Hanumant Chavan numbers should be kept"
 );
 
 console.log("momentos.selftest ok");
